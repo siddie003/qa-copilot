@@ -24,7 +24,11 @@ export function ProjectTabs({ projectId }: { projectId: string }) {
         {TABS.map((t) => {
           const href = base + t.segment;
           // Segment-exact match ("/scan" must not match "/scanners").
-          const active = pathname === href || (t.segment !== "" && pathname.startsWith(`${href}/`));
+          const active =
+            pathname === href ||
+            (t.segment !== "" && pathname.startsWith(`${href}/`)) ||
+            // Individual scan pages (/scans/<id>) belong to the Scan tab.
+            (t.segment === "/scan" && pathname.startsWith(`${base}/scans/`));
           return (
             <li key={t.label}>
               <Link

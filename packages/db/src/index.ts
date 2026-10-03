@@ -9,6 +9,7 @@ export * as issuesRepo from "./repositories/issues";
 export * as pagesRepo from "./repositories/pages";
 export * as reportsRepo from "./repositories/reports";
 export * as referencesRepo from "./repositories/references";
+export * as pipelineRepo from "./repositories/pipeline";
 export type { IssueCounts, LastScanSummary, ProjectSummary } from "./repositories/projects";
 export type { DashboardSummary } from "./repositories/dashboard";
 export type { ScanListItem, ScannerRunRow } from "./repositories/scans";

@@ -1,14 +1,14 @@
 import { SCANNER_KEYS, SCANNER_LABELS, stepLabel } from "@qa/core";
 import { getDb, referencesRepo, scansRepo } from "@qa/db";
-import { CheckCircle2, CircleDashed, Play } from "lucide-react";
+import { CheckCircle2, CircleDashed } from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { StepStatus } from "@/components/ui/badges";
-import { Button } from "@/components/ui/button";
 import { InfoTip } from "@/components/ui/info-tip";
 import { Card } from "@/components/ui/stat";
 import { formatDateTime } from "@/lib/format";
 import { loadProjectForPage } from "@/server/loaders";
+import { StartScan } from "./start-scan";
 
 export const metadata: Metadata = { title: "Scan" };
 
@@ -38,6 +38,7 @@ export default async function ProjectScanPage({ params }: { params: Promise<{ id
     referencesRepo.countContentDocuments(db, project.id),
     scansRepo.getLatestScan(db, user.id, project.id),
   ]);
+  const active = latest && ["queued", "running"].includes(latest.status) ? latest : null;
   const d = project.scanDefaults;
   const settingsHref = `/projects/${project.id}/settings`;
 
@@ -89,7 +90,13 @@ export default async function ProjectScanPage({ params }: { params: Promise<{ id
           {latest ? (
             <>
               <p className="mb-2 text-sm text-muted">
-                Scan #{latest.number} · {formatDateTime(latest.createdAt)}
+                <Link
+                  href={`/projects/${project.id}/scans/${latest.id}`}
+                  className="font-medium text-primary hover:underline"
+                >
+                  Scan #{latest.number}
+                </Link>{" "}
+                · {formatDateTime(latest.createdAt)}
               </p>
               <ul className="divide-y divide-border">
                 {latest.runs.map((r) => (
@@ -133,16 +140,28 @@ export default async function ProjectScanPage({ params }: { params: Promise<{ id
           </dl>
         </Card>
         <div className="rounded-lg border border-border bg-surface p-4">
-          <Button className="w-full" disabled aria-describedby="scan-unavailable">
-            <Play aria-hidden className="size-4" />
-            Start QA Scan
-          </Button>
-          <p id="scan-unavailable" className="mt-2 flex items-start gap-1 text-xs text-muted">
-            Scanning is not available yet. The crawler, browser automation and scanners are built in
-            Phases 4–5.
-            <InfoTip label="Why is scanning disabled?">
-              The button is disabled rather than simulated: no scan results are shown until real
-              scanners have run against the website.
+          {active ? (
+            <div className="space-y-2 text-sm">
+              <p>
+                Scan #{active.number} is {active.status === "queued" ? "queued" : "running"}.
+              </p>
+              <Link
+                href={`/projects/${project.id}/scans/${active.id}`}
+                className="font-medium text-primary hover:underline"
+              >
+                View live progress
+              </Link>
+            </div>
+          ) : (
+            <StartScan projectId={project.id} websiteUrl={project.websiteUrl} />
+          )}
+          <p className="mt-3 flex items-start gap-1 text-xs text-muted">
+            Crawling and browser capture run now; the six QA scanners are added in Phase 5 and are
+            shown as skipped until then.
+            <InfoTip label="What does a scan do today?">
+              The scan checks the site is reachable, crawls pages within your limits, and captures
+              each page at every viewport (screenshot, DOM, network, console). Steps that are not
+              implemented yet are marked as skipped with the reason, never as completed.
             </InfoTip>
           </p>
         </div>

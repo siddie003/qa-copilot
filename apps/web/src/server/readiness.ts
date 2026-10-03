@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { APP_VERSION, ConfigError, errorFields, getConfig, getLogger } from "@qa/core";
-import { checkDatabase, getPool, type DatabaseHealth } from "@qa/db";
+import { checkDatabase, getMigrationStatus, getPool, type DatabaseHealth } from "@qa/db";
 
 export type ComponentCheck<T extends object = object> =
   | ({ status: "ok" } & T)
@@ -18,6 +18,7 @@ export interface ReadinessReport {
     config: ComponentCheck;
     database: DatabaseHealth | { status: "skipped"; reason: string };
     storage: ComponentCheck<{ path: string }>;
+    migrations: ComponentCheck<{ applied: number; expected: number }>;
   };
 }
 
@@ -35,6 +36,29 @@ export async function checkStorage(dir: string): Promise<ComponentCheck<{ path: 
       status: "error",
       code: "STORAGE_NOT_WRITABLE",
       message: "Storage directory is not writable",
+    };
+  }
+}
+
+async function checkMigrations(
+  dbOk: boolean,
+): Promise<ComponentCheck<{ applied: number; expected: number }>> {
+  if (!dbOk) return { status: "skipped", reason: "Database unavailable" };
+  try {
+    const m = await getMigrationStatus(getPool());
+    if (m.pending > 0)
+      return {
+        status: "error",
+        code: "MIGRATIONS_PENDING",
+        message: `${m.pending} database migration(s) not applied. Run: npm run db:migrate`,
+      };
+    return { status: "ok", applied: m.applied, expected: m.expected };
+  } catch (err) {
+    getLogger().error(errorFields(err), "migration status check failed");
+    return {
+      status: "error",
+      code: "MIGRATIONS_UNKNOWN",
+      message: "Migration status could not be read",
     };
   }
 }
@@ -66,6 +90,7 @@ export async function runReadinessChecks(
         },
         database: skipped,
         storage: skipped,
+        migrations: skipped,
       },
     };
   }
@@ -74,7 +99,8 @@ export async function runReadinessChecks(
     checkDatabase(getPool()),
     checkStorage(config.storageDirAbsolute),
   ]);
-  const ready = database.status === "ok" && storage.status === "ok";
+  const migrations = await checkMigrations(database.status === "ok");
+  const ready = database.status === "ok" && storage.status === "ok" && migrations.status === "ok";
   return {
     status: ready ? "ready" : "not_ready",
     version: APP_VERSION,
@@ -82,6 +108,7 @@ export async function runReadinessChecks(
     checks: {
       config: { status: "ok" },
       database,
+      migrations,
       // The filesystem path is server detail; only include it for trusted views.
       storage:
         storage.status === "ok" && !opts.includeDetails

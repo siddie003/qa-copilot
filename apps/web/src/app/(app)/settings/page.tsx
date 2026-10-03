@@ -39,7 +39,7 @@ export default async function SettingsPage() {
   await connection(); // Always render at request time: these are live checks.
   const user = await requirePageUser();
   const report = await runReadinessChecks({ includeDetails: true });
-  const { config, database, storage } = report.checks;
+  const { config, database, storage, migrations } = report.checks;
 
   let summary: ReturnType<typeof describeConfig> | undefined;
   try {
@@ -96,6 +96,18 @@ export default async function SettingsPage() {
               {storage.status === "ok" && <span className="break-all">{storage.path}</span>}
               {storage.status === "error" && <span>{storage.message}</span>}
               {storage.status === "skipped" && <span>{storage.reason}</span>}
+            </span>
+          </Row>
+          <Row label="Database migrations">
+            <span className="flex flex-col items-start gap-1 sm:items-end">
+              <StatusPill tone={tone(migrations.status)}>{migrations.status}</StatusPill>
+              {migrations.status === "ok" && (
+                <span>
+                  {migrations.applied} of {migrations.expected} applied
+                </span>
+              )}
+              {migrations.status === "error" && <span>{migrations.message}</span>}
+              {migrations.status === "skipped" && <span>{migrations.reason}</span>}
             </span>
           </Row>
           <Row label="Checked at">

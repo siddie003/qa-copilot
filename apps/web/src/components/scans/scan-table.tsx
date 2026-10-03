@@ -43,7 +43,14 @@ export function ScanTable({ scans, showProject }: { scans: ScanListItem[]; showP
         <tbody className="divide-y divide-border">
           {scans.map((s) => (
             <tr key={s.id}>
-              <td className="px-4 py-3 font-medium">#{s.number}</td>
+              <td className="px-4 py-3 font-medium">
+                <Link
+                  href={`/projects/${s.projectId}/scans/${s.id}`}
+                  className="text-primary hover:underline"
+                >
+                  #{s.number}
+                </Link>
+              </td>
               {showProject && (
                 <td className="px-4 py-3">
                   <Link href={`/projects/${s.projectId}/history`} className="hover:underline">

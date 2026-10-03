@@ -66,13 +66,37 @@
 - Playwright e2e runs a production server on port 3100 (`reuseExistingServer`; stop stale servers
   after rebuilding). Throwaway e2e accounts use `@example.test` and are deleted in `afterAll`.
 
+## Phase 4 decisions
+- Job queue = `scan` table (no pg-boss): `claimNextScan` uses `FOR UPDATE SKIP LOCKED`; heartbeat
+  every 5 s; `failStaleScans` (2 min) on worker start; LISTEN `scan_queued` + 5 s poll fallback.
+- Step rows are created with the scan from `planScanSteps()` (`packages/core/src/pipeline.ts`);
+  steps not implemented yet are inserted as `skipped` with the phase in the reason. Add keys to
+  `IMPLEMENTED_STEPS` as scanners land.
+- SSRF layers: static URL check on save; `assertPublicTarget` before each request/redirect;
+  undici dispatcher lookup refuses private IPs at connect time; Playwright `context.route` guard
+  (cached per host:port). Residual risk: Chromium resolves DNS itself, so rebinding between the
+  route check and Chromium's own connection is theoretically possible. Production should restrict
+  worker egress (Phase 10).
+- `localhost:4100` typed without a scheme becomes `https://`; the fixture is plain HTTP, so use
+  `http://localhost:4100`.
+- Robots: 4xx = allow all; unreachable = disallow all (RFC 9309).
+- Body sizes reported by Playwright are approximate under request interception; `decoded_size`
+  is the server-declared Content-Length (null if absent). `from_cache` is always false.
+- Never pass functions containing named inner functions to `page.evaluate` (tsx/esbuild injects
+  `__name`). Use string scripts (`TIMINGS_SCRIPT`); regression check: `npm run check:tsx-capture`.
+- The migrations folder is resolved from the repo root (bundled apps have a different module URL).
+- SSE: one shared LISTEN client per web process (`scan-events.ts`), 300 ms coalescing, stream
+  closes on a final status; the client falls back to polling every 3 s.
+- E2E: Playwright starts web (3100), worker (health 3191) and fixture (4100) with
+  `reuseExistingServer`, so stop stale servers after code changes.
+
 ## Environment facts
 - PostgreSQL 18 binaries: `C:\Program Files\PostgreSQL\18\bin` (not on PATH). Service `postgresql-x64-18`.
 - No Docker, no Redis, no pnpm. Windows 11, Node 22.16.
 - Project folder: `C:\Users\Siddharth\Downloads\qa-copilot`.
 
 ## Unfinished tasks
-- None inside Phase 3. Next: Phase 4 (after approval).
+- None inside Phase 4. Next: Phase 5 (after approval).
 
 ## Known bugs
 - None known.

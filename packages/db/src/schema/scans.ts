@@ -34,6 +34,10 @@ export const scan = pgTable(
     isDemo: boolean().notNull().default(false),
     triggeredByUserId: text().references(() => user.id, { onDelete: "set null" }),
     error: text(),
+    /** The scan row is the durable job: the worker claims queued rows with SKIP LOCKED. */
+    workerId: varchar({ length: 128 }),
+    heartbeatAt: timestamp({ withTimezone: true }),
+    cancelRequestedAt: timestamp({ withTimezone: true }),
     createdAt: createdAt(),
     startedAt: timestamp({ withTimezone: true }),
     finishedAt: timestamp({ withTimezone: true }),
@@ -41,6 +45,7 @@ export const scan = pgTable(
   (t) => [
     unique("scan_project_number_uq").on(t.projectId, t.number),
     index("scan_project_created_idx").on(t.projectId, t.createdAt),
+    index("scan_status_created_idx").on(t.status, t.createdAt),
   ],
 );
 
@@ -84,6 +89,10 @@ export const page = pgTable(
     discoveredFrom: text(),
     title: text(),
     contentType: varchar({ length: 255 }),
+    /** Response headers of the final response (Set-Cookie values redacted, flags kept). */
+    responseHeaders: jsonb().$type<Record<string, string | string[]>>(),
+    /** Raw HTML as served (before JavaScript), stored as an artifact. */
+    rawHtmlKey: text(),
     crawlError: text(),
     createdAt: createdAt(),
   },

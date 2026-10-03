@@ -4,7 +4,7 @@ AI-powered website QA, design and brand compliance platform. You provide a desig
 (Figma or brand guidelines), approved content and a website URL; QA Copilot crawls the site,
 runs evidence-based QA scanners, and turns the findings into developer-ready issues and reports.
 
-> **Status:** Phase 3 (dashboard and UI). Scanning starts in Phase 4. See [PROJECT_STATUS.md](PROJECT_STATUS.md) and
+> **Status:** Phase 4 (crawler, browser automation, live scans). QA scanners arrive in Phase 5. See [PROJECT_STATUS.md](PROJECT_STATUS.md) and
 > [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). A full README (Docker, deployment, scanners, AI
 > configuration) is completed in Phase 10.
 
@@ -21,7 +21,11 @@ npm run setup:env        # creates .env with generated local secrets (never over
 npm run db:bootstrap     # creates the qa_copilot role + databases; psql asks for your postgres password
 npm run db:check         # verifies the app can connect
 npm run db:migrate       # creates/updates all tables (run after every pull)
+npx playwright install chromium   # browser used by the scan worker
 ```
+
+If migrations are pending, `/api/v1/health/ready` and the Settings page say so and the worker
+pauses scan processing until `npm run db:migrate` has run.
 
 Then open http://localhost:3000, choose **Create one** on the sign-in page and create an account.
 Set `AUTH_ALLOW_SIGNUP=false` to close self-service sign-up.
@@ -46,13 +50,36 @@ npm run start:web
 npm run start:worker
 ```
 
+## Running a scan
+
+1. Start the web app and the worker (`npm run dev`).
+2. Open a project, go to **Scan**, confirm you are authorized to test the site, then **Start QA Scan**.
+3. The scan page shows live progress from the worker (Server-Sent Events, polling fallback).
+
+What a scan does today: preflight (URL safety checks, reachability, robots.txt, technology
+detection), crawl (same-site pages within the page/depth limits, redirects, HTTP status, links
+rendered by JavaScript), browser capture (every page at every viewport: screenshot, rendered DOM,
+network requests, console). QA scanners, AI analysis and reports are shown as "skipped" with the
+phase that implements them.
+
+To try it locally, run the controlled fixture website and scan `http://localhost:4100`
+(allowlisted by default in `.env.example`):
+
+```bash
+npm run demo:site
+```
+
+Scanning private or internal addresses is blocked unless the `host:port` is listed in
+`SCAN_ALLOWED_PRIVATE_HOSTS`. Checks run before every request, at every redirect hop, at
+connection time (DNS rebinding) and for every request made by the browser.
+
 ## Health checks
 
 | Endpoint | Purpose |
 |---|---|
 | `GET http://localhost:3000/api/v1/health` | Web liveness (no dependencies) |
 | `GET http://localhost:3000/api/v1/health/ready` | Config valid, PostgreSQL reachable, storage writable; 503 otherwise |
-| `GET http://127.0.0.1:3001/health` | Worker status incl. database connectivity; 503 when degraded |
+| `GET http://127.0.0.1:3001/health` | Worker status: database, scan worker state, current scan; 503 when degraded |
 
 The **Settings** page shows the same live checks in the UI.
 
@@ -94,9 +121,10 @@ Integration tests run against `TEST_DATABASE_URL` (created by `db:bootstrap`), a
 automatically and truncate tables between tests. They refuse to run against a database whose
 name does not end in `_test`.
 
-End-to-end accessibility tests (Playwright + axe-core, WCAG 2.2 A/AA, desktop and 390px mobile).
-They start a production server on port 3100 (run `npm run build` first; your dev server on 3000
-is not touched) and remove their throwaway account afterwards:
+End-to-end tests (Playwright): accessibility audits (axe-core, WCAG 2.2 A/AA, desktop and 390px
+mobile) and a full scan from the UI against the fixture site. They start a production web server
+on port 3100, a worker (health port 3191) and the fixture site on 4100 (run `npm run build`
+first; your dev servers are not touched) and remove their throwaway accounts and screenshots:
 
 ```bash
 npx playwright install chromium   # once
@@ -115,10 +143,14 @@ npm run smoke:phase2 -- verify    # checks data persisted, then cleans up
 
 ```
 apps/web           Next.js UI, auth, /api/v1 route handlers
-apps/worker        Background worker (scan pipeline from Phase 4)
+apps/worker        Scan worker: claims queued scans and runs the pipeline
 packages/core      Config validation, logging, error model, domain schemas
 packages/db        Drizzle schema (24 tables), migrations, repositories, health check
-packages/security  Website URL validation (SSRF rules), safe redirects
+packages/security  URL validation, DNS/connect-time SSRF guard, safe redirects
+packages/crawler   HTTP fetcher, URL normalization, robots.txt, crawl loop, technology detection
+packages/browser   Playwright capture with an in-browser network guard
+packages/storage   Artifact storage (screenshots, HTML snapshots)
+fixtures/demo-site Controlled test website (see its README)
 scripts/           Environment and database bootstrap scripts
 tests/             Integration test setup, HTTP smoke tests
 docs/              Architecture and design documents

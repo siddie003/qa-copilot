@@ -32,7 +32,9 @@
     "test:unit": "vitest run --project unit",
     "test:integration": "vitest run --project integration",
     "smoke:phase2": "node tests/smoke/phase2.mjs",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "check:tsx-capture": "tsx tests/setup/tsx-evaluate-check.ts",
+    "demo:site": "node fixtures/demo-site/server.mjs"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.13.0",

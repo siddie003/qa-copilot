@@ -150,7 +150,7 @@ export default async function DashboardPage() {
                   >
                     <div>
                       <Link
-                        href={`/projects/${s.projectId}/history`}
+                        href={`/projects/${s.projectId}/scans/${s.id}`}
                         className="font-medium hover:underline"
                       >
                         {s.projectName}

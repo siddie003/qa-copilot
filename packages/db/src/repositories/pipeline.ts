@@ -1,0 +1,402 @@
+import { and, asc, count, desc, eq, inArray, isNull, lt, sql } from "drizzle-orm";
+import type { Database } from "../client";
+import { networkRequest, page, pageCapture, project, scan, scannerRun } from "../schema";
+import { ownedProjects } from "./owned";
+
+export const SCAN_EVENTS_CHANNEL = "scan_events";
+
+type StepStatus = "pending" | "running" | "completed" | "failed" | "inconclusive" | "skipped";
+
+/** Tells listeners (SSE endpoints) that something about this scan changed. */
+export async function notifyScan(db: Database, scanId: string) {
+  await db.execute(sql`select pg_notify(${SCAN_EVENTS_CHANNEL}, ${scanId})`);
+}
+
+export interface NewScanStep {
+  stepKey: string;
+  status?: StepStatus;
+  statusReason?: string;
+}
+
+/**
+ * Creates a queued scan with its pipeline steps in one transaction. The per-project scan number
+ * comes from an atomic counter update. Returns null if the project is not owned by the user.
+ */
+export async function createScan(
+  db: Database,
+  ownerId: string,
+  projectId: string,
+  values: {
+    configSnapshot: Record<string, unknown>;
+    steps: NewScanStep[];
+    triggeredByUserId: string;
+  },
+) {
+  const created = await db.transaction(async (tx) => {
+    const [counter] = await tx
+      .update(project)
+      .set({ scanCounter: sql`${project.scanCounter} + 1` })
+      .where(and(eq(project.id, projectId), ownedProjects(ownerId)))
+      .returning({ number: project.scanCounter, isDemo: project.isDemo });
+    if (!counter) return null;
+    const [row] = await tx
+      .insert(scan)
+      .values({
+        projectId,
+        number: counter.number,
+        status: "queued",
+        configSnapshot: values.configSnapshot,
+        isDemo: counter.isDemo,
+        triggeredByUserId: values.triggeredByUserId,
+      })
+      .returning();
+    await tx.insert(scannerRun).values(
+      values.steps.map((s, i) => ({
+        scanId: row!.id,
+        stepKey: s.stepKey,
+        position: i + 1,
+        status: s.status ?? ("pending" as const),
+        statusReason: s.statusReason ?? null,
+      })),
+    );
+    return row!;
+  });
+  if (created) await db.execute(sql`select pg_notify('scan_queued', ${created.id})`);
+  return created;
+}
+
+/** True if the project already has a scan that is queued or running. */
+export async function hasActiveScan(db: Database, projectId: string) {
+  const [row] = await db
+    .select({ n: count() })
+    .from(scan)
+    .where(and(eq(scan.projectId, projectId), inArray(scan.status, ["queued", "running"])));
+  return (row?.n ?? 0) > 0;
+}
+
+/**
+ * Atomically claims the oldest queued scan for this worker (FOR UPDATE SKIP LOCKED), so several
+ * workers can run safely in parallel. Returns null when there is nothing to do.
+ */
+export async function claimNextScan(db: Database, workerId: string) {
+  const rows = await db.execute<{ id: string }>(sql`
+    update ${scan} set status = 'running', worker_id = ${workerId}, started_at = now(), heartbeat_at = now()
+    where id = (
+      select id from ${scan} where status = 'queued' and cancel_requested_at is null
+      order by created_at for update skip locked limit 1
+    )
+    returning id`);
+  const id = rows.rows[0]?.id;
+  if (!id) return null;
+  const [row] = await db.select().from(scan).where(eq(scan.id, id));
+  await notifyScan(db, id);
+  return row ?? null;
+}
+
+/** Heartbeat; returns whether cancellation was requested. */
+export async function heartbeat(db: Database, scanId: string) {
+  const [row] = await db
+    .update(scan)
+    .set({ heartbeatAt: sql`now()` })
+    .where(eq(scan.id, scanId))
+    .returning({ cancelRequestedAt: scan.cancelRequestedAt });
+  return { cancelRequested: Boolean(row?.cancelRequestedAt) };
+}
+
+/** Cancels queued scans immediately; running scans are cancelled by their worker. Owner-checked. */
+export async function requestCancel(db: Database, ownerId: string, scanId: string) {
+  const [target] = await db
+    .select({ id: scan.id, status: scan.status })
+    .from(scan)
+    .innerJoin(project, eq(project.id, scan.projectId))
+    .where(and(eq(scan.id, scanId), ownedProjects(ownerId)));
+  if (!target) return null;
+  if (target.status === "queued") {
+    await db.transaction(async (tx) => {
+      await tx
+        .update(scan)
+        .set({ status: "cancelled", cancelRequestedAt: sql`now()`, finishedAt: sql`now()` })
+        .where(eq(scan.id, scanId));
+      await tx
+        .update(scannerRun)
+        .set({ status: "skipped", statusReason: "Scan cancelled before it started" })
+        .where(and(eq(scannerRun.scanId, scanId), eq(scannerRun.status, "pending")));
+    });
+  } else if (target.status === "running") {
+    await db
+      .update(scan)
+      .set({ cancelRequestedAt: sql`now()` })
+      .where(eq(scan.id, scanId));
+  }
+  await notifyScan(db, scanId);
+  const [after] = await db.select({ status: scan.status }).from(scan).where(eq(scan.id, scanId));
+  return { status: after!.status, previousStatus: target.status };
+}
+
+export async function updateStep(
+  db: Database,
+  scanId: string,
+  stepKey: string,
+  patch: {
+    status: StepStatus;
+    statusReason?: string | null;
+    error?: string | null;
+    findingCount?: number;
+    toolName?: string | null;
+    toolVersion?: string | null;
+    started?: boolean;
+    finished?: boolean;
+  },
+) {
+  await db
+    .update(scannerRun)
+    .set({
+      status: patch.status,
+      ...(patch.statusReason !== undefined ? { statusReason: patch.statusReason } : {}),
+      ...(patch.error !== undefined ? { error: patch.error } : {}),
+      ...(patch.findingCount !== undefined ? { findingCount: patch.findingCount } : {}),
+      ...(patch.toolName !== undefined ? { toolName: patch.toolName } : {}),
+      ...(patch.toolVersion !== undefined ? { toolVersion: patch.toolVersion } : {}),
+      ...(patch.started ? { startedAt: sql`now()` } : {}),
+      ...(patch.finished
+        ? {
+            finishedAt: sql`now()`,
+            durationMs: sql`(extract(epoch from (now() - coalesce(${scannerRun.startedAt}, now()))) * 1000)::int`,
+          }
+        : {}),
+    })
+    .where(and(eq(scannerRun.scanId, scanId), eq(scannerRun.stepKey, stepKey)));
+  await notifyScan(db, scanId);
+}
+
+/** Marks every still-pending step as skipped with a reason (e.g. after a fatal failure). */
+export async function skipPendingSteps(db: Database, scanId: string, reason: string) {
+  await db
+    .update(scannerRun)
+    .set({ status: "skipped", statusReason: reason })
+    .where(and(eq(scannerRun.scanId, scanId), eq(scannerRun.status, "pending")));
+  await notifyScan(db, scanId);
+}
+
+export async function finishScan(
+  db: Database,
+  scanId: string,
+  status: "completed" | "completed_with_failures" | "failed" | "cancelled",
+  error?: string | null,
+) {
+  await db
+    .update(scan)
+    .set({ status, finishedAt: sql`now()`, error: error ?? null })
+    .where(eq(scan.id, scanId));
+  await notifyScan(db, scanId);
+}
+
+export async function setTechnology(
+  db: Database,
+  scanId: string,
+  technology: Record<string, unknown>,
+) {
+  await db.update(scan).set({ technology }).where(eq(scan.id, scanId));
+}
+
+/**
+ * Scans whose worker stopped sending heartbeats (crash, restart) are marked failed so they never
+ * stay "running" forever. Returns the ids that were recovered.
+ */
+export async function failStaleScans(db: Database, staleAfterMs: number) {
+  const stale = await db
+    .select({ id: scan.id })
+    .from(scan)
+    .where(
+      and(
+        eq(scan.status, "running"),
+        lt(scan.heartbeatAt, sql`now() - (${staleAfterMs} || ' milliseconds')::interval`),
+      ),
+    );
+  for (const { id } of stale) {
+    await db
+      .update(scannerRun)
+      .set({
+        status: "failed",
+        error: "Worker stopped while this step was running",
+        finishedAt: sql`now()`,
+      })
+      .where(and(eq(scannerRun.scanId, id), eq(scannerRun.status, "running")));
+    await skipPendingSteps(db, id, "Scan was interrupted (worker stopped)");
+    await finishScan(
+      db,
+      id,
+      "failed",
+      "The worker stopped responding during this scan. Start a new scan.",
+    );
+  }
+  return stale.map((s) => s.id);
+}
+
+export interface NewPage {
+  /** Optional pre-generated id so artifact keys can be derived before the insert. */
+  id?: string;
+  url: string;
+  normalizedUrl: string;
+  finalUrl: string | null;
+  httpStatus: number | null;
+  redirectChain: Array<{ url: string; status: number }> | null;
+  depth: number;
+  discoveredFrom: string | null;
+  title: string | null;
+  contentType: string | null;
+  responseHeaders: Record<string, string | string[]> | null;
+  rawHtmlKey: string | null;
+  crawlError: string | null;
+}
+
+export async function insertPage(db: Database, scanId: string, values: NewPage) {
+  const [row] = await db
+    .insert(page)
+    .values({ scanId, ...values })
+    .onConflictDoNothing({ target: [page.scanId, page.normalizedUrl] })
+    .returning({ id: page.id });
+  return row?.id ?? null;
+}
+
+export async function setPageRawHtmlKey(db: Database, pageId: string, key: string) {
+  await db.update(page).set({ rawHtmlKey: key }).where(eq(page.id, pageId));
+}
+
+/** Pages to capture with the browser: same-site HTML pages that returned < 400. */
+export async function listCapturablePages(db: Database, scanId: string) {
+  return db
+    .select({ id: page.id, url: page.url, finalUrl: page.finalUrl })
+    .from(page)
+    .where(
+      and(
+        eq(page.scanId, scanId),
+        isNull(page.crawlError),
+        lt(page.httpStatus, 400),
+        sql`(${page.contentType} ilike 'text/html%' or ${page.contentType} ilike 'application/xhtml%')`,
+      ),
+    )
+    .orderBy(asc(page.depth), asc(page.createdAt));
+}
+
+export async function insertCapture(
+  db: Database,
+  values: {
+    pageId: string;
+    viewport: string;
+    width: number;
+    height: number;
+    screenshotKey: string | null;
+    domSnapshotKey: string | null;
+    consoleMessages: Array<Record<string, unknown>>;
+    timings: Record<string, unknown>;
+    error: string | null;
+    requests: Array<{
+      url: string;
+      resourceType: string;
+      method: string;
+      status: number | null;
+      transferSize: number | null;
+      decodedSize: number | null;
+      durationMs: number | null;
+      failureText: string | null;
+      fromCache: boolean;
+      isMixedContent: boolean;
+    }>;
+  },
+) {
+  const { requests, ...capture } = values;
+  return db.transaction(async (tx) => {
+    const [row] = await tx.insert(pageCapture).values(capture).returning({ id: pageCapture.id });
+    for (let i = 0; i < requests.length; i += 500) {
+      const batch = requests
+        .slice(i, i + 500)
+        .map((r) => ({ ...r, url: r.url.slice(0, 4000), pageCaptureId: row!.id }));
+      if (batch.length) await tx.insert(networkRequest).values(batch);
+    }
+    return row!.id;
+  });
+}
+
+export async function countPages(db: Database, scanId: string) {
+  const [row] = await db.select({ n: count() }).from(page).where(eq(page.scanId, scanId));
+  return row?.n ?? 0;
+}
+
+/** Full scan view for the UI/API (owner-checked): scan, steps, page and capture counts. */
+export async function getScanDetail(db: Database, ownerId: string, scanId: string) {
+  const [row] = await db
+    .select({
+      id: scan.id,
+      number: scan.number,
+      status: scan.status,
+      projectId: scan.projectId,
+      projectName: project.name,
+      configSnapshot: scan.configSnapshot,
+      technology: scan.technology,
+      error: scan.error,
+      cancelRequestedAt: scan.cancelRequestedAt,
+      createdAt: scan.createdAt,
+      startedAt: scan.startedAt,
+      finishedAt: scan.finishedAt,
+      isDemo: scan.isDemo,
+    })
+    .from(scan)
+    .innerJoin(project, eq(project.id, scan.projectId))
+    .where(and(eq(scan.id, scanId), ownedProjects(ownerId)));
+  if (!row) return null;
+  const [runs, [pages], [captures]] = await Promise.all([
+    db
+      .select()
+      .from(scannerRun)
+      .where(eq(scannerRun.scanId, scanId))
+      .orderBy(asc(scannerRun.position)),
+    db.select({ n: count() }).from(page).where(eq(page.scanId, scanId)),
+    db
+      .select({ n: count() })
+      .from(pageCapture)
+      .innerJoin(page, eq(page.id, pageCapture.pageId))
+      .where(eq(page.scanId, scanId)),
+  ]);
+  return { ...row, runs, pageCount: pages?.n ?? 0, captureCount: captures?.n ?? 0 };
+}
+
+/** Captures (screenshots per viewport) for the pages of a scan, owner-checked. */
+export async function listCapturesForScan(db: Database, ownerId: string, scanId: string) {
+  return db
+    .select({
+      pageId: page.id,
+      url: page.url,
+      viewport: pageCapture.viewport,
+      width: pageCapture.width,
+      height: pageCapture.height,
+      screenshotKey: pageCapture.screenshotKey,
+      error: pageCapture.error,
+    })
+    .from(pageCapture)
+    .innerJoin(page, eq(page.id, pageCapture.pageId))
+    .innerJoin(scan, eq(scan.id, page.scanId))
+    .innerJoin(project, eq(project.id, scan.projectId))
+    .where(and(eq(scan.id, scanId), ownedProjects(ownerId)))
+    .orderBy(asc(page.depth), asc(page.url), asc(pageCapture.viewport));
+}
+
+/** Resolves which scan an artifact key belongs to and whether the user may read it. */
+export async function canReadScanArtifacts(db: Database, ownerId: string, scanId: string) {
+  const [row] = await db
+    .select({ id: scan.id })
+    .from(scan)
+    .innerJoin(project, eq(project.id, scan.projectId))
+    .where(and(eq(scan.id, scanId), ownedProjects(ownerId)));
+  return Boolean(row);
+}
+
+export async function latestScanIdForProject(db: Database, projectId: string) {
+  const [row] = await db
+    .select({ id: scan.id })
+    .from(scan)
+    .where(eq(scan.projectId, projectId))
+    .orderBy(desc(scan.createdAt))
+    .limit(1);
+  return row?.id ?? null;
+}

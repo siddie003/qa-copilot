@@ -2,6 +2,27 @@
 
 ## [Unreleased]
 
+### Phase 4: Crawler, browser automation and live scans (2026-10-03)
+#### Added
+- Scan-time SSRF protection: DNS checks before every request and redirect hop, connect-time
+  address pinning (undici dispatcher) against DNS rebinding, and an in-browser request guard;
+  explicit allowlist for authorized internal hosts.
+- Crawler: URL normalization, same-site scope, breadth-first crawl with page/depth limits,
+  robots.txt (RFC 9309), redirect chains, retries for transient failures only, body size cap,
+  JavaScript-rendered link discovery.
+- Technology detection with explicit signals and confidence ("Could not determine" otherwise).
+- Playwright capture per page and viewport: screenshot, rendered DOM, network requests, console
+  messages, navigation timings; mobile emulation below 768 px.
+- Artifact storage with strict key validation; authenticated artifact endpoint.
+- Worker scan pipeline (preflight, crawl, capture) with per-step timeouts, heartbeats,
+  cancellation and crash recovery; scan rows as the job queue (SKIP LOCKED).
+- Start QA Scan with authorization confirmation; live scan page (SSE + polling fallback, cancel,
+  technology, screenshots); one active scan per project.
+- Migration status in readiness/Settings; the worker pauses while migrations are pending.
+- Controlled fixture website and an end-to-end scan test.
+#### Fixed
+- In-page scripts are sent as strings so tsx/esbuild `__name` helpers cannot break them.
+
 ### Phase 3: Dashboard and UI (2026-10-03)
 #### Added
 - Dashboard backed by stored data: project and issue totals, outstanding issues by severity,

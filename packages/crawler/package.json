@@ -1,0 +1,18 @@
+{
+  "name": "@qa/crawler",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@qa/security": "0.1.0",
+    "cheerio": "^1.2.0",
+    "robots-parser": "^3.0.1",
+    "undici": "^7.30.0"
+  }
+}

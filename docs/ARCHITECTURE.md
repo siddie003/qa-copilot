@@ -22,6 +22,13 @@ Status: **Draft for approval** · Date: 2026-10-03 · Phase: 0 (no functional co
 ---
 
 > **Amendments during implementation**
+> - Phase 4: **no pg-boss.** The `scan` row is the durable job: the web app inserts it as
+>   `queued` and NOTIFYs `scan_queued`; workers claim rows with `UPDATE ... FOR UPDATE SKIP LOCKED`,
+>   send heartbeats, honor `cancel_requested_at`, and stale `running` scans are failed on worker
+>   start. Same guarantees with less machinery. Live status: NOTIFY `scan_events`, one shared
+>   LISTEN connection per web process, SSE to the browser.
+> - Phase 4: crawling uses HTTP for status/headers/redirects plus a Chromium render to discover
+>   JavaScript-created links; capture renders every page at every viewport.
 > - Phase 2: the stable issue id (`ISSUE-<n>`) is stored on `issue_track.display_no` (not on the
 >   per-scan `issue`), and `issue_track` keeps the latest severity/category/title. `project` has
 >   `scan_counter`/`issue_counter`. `packages/security` was created in Phase 2 for URL validation.
