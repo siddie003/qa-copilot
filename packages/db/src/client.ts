@@ -37,7 +37,7 @@ export function getPool(): pg.Pool {
 }
 
 export function getDb(): Database {
-  globalCache.__qaDb ??= drizzle(getPool(), { schema });
+  globalCache.__qaDb ??= drizzle(getPool(), { schema, casing: "snake_case" });
   return globalCache.__qaDb;
 }
 

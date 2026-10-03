@@ -23,16 +23,20 @@
     "build": "npm run build -w @qa/web",
     "start:web": "npm run start -w @qa/web",
     "start:worker": "npm run start -w @qa/worker",
-    "typecheck": "npm run typecheck --workspaces --if-present",
+    "typecheck": "tsc -p tsconfig.json && npm run typecheck --workspaces --if-present",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:unit": "vitest run --project unit",
+    "test:integration": "vitest run --project integration",
+    "smoke:phase2": "node tests/smoke/phase2.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.20.5",
     "concurrently": "^10.0.5",
+    "dotenv": "^18.0.5",
     "eslint": "^9.39.5",
     "prettier": "^3.9.9",
     "tsx": "^4.23.15",

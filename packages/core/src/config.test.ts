@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { ConfigError, describeConfig, parseConfig } from "./config";
 
-const base = { DATABASE_URL: "postgres://qa:secret-pw@localhost:5432/qa_copilot" };
+const base = {
+  DATABASE_URL: "postgres://qa:secret-pw@localhost:5432/qa_copilot",
+  BETTER_AUTH_SECRET: "auth-secret-value-that-is-long-enough-123",
+};
 
 function issuesOf(env: Record<string, string>) {
   try {
@@ -52,9 +55,19 @@ describe("parseConfig", () => {
     throw new Error("expected ConfigError");
   });
 
-  it("requires auth and encryption secrets in production", () => {
+  it("requires the auth secret in every environment", () => {
+    const vars = issuesOf({ DATABASE_URL: base.DATABASE_URL }).map((i) => i.variable);
+    expect(vars).toEqual(["BETTER_AUTH_SECRET"]);
+  });
+
+  it("rejects a short auth secret", () => {
+    const vars = issuesOf({ ...base, BETTER_AUTH_SECRET: "short" }).map((i) => i.variable);
+    expect(vars).toEqual(["BETTER_AUTH_SECRET"]);
+  });
+
+  it("requires the encryption key in production", () => {
     const vars = issuesOf({ ...base, NODE_ENV: "production" }).map((i) => i.variable);
-    expect(vars).toEqual(expect.arrayContaining(["BETTER_AUTH_SECRET", "ENCRYPTION_KEY"]));
+    expect(vars).toEqual(["ENCRYPTION_KEY"]);
   });
 
   it("requires the provider key when an AI provider is selected", () => {
@@ -91,6 +104,7 @@ describe("describeConfig", () => {
     expect(text).not.toContain("secret-pw");
     expect(text).not.toContain("figd_secret_token");
     expect(text).not.toContain("x".repeat(40));
+    expect(text).not.toContain(base.BETTER_AUTH_SECRET);
     expect(describeConfig(cfg).figmaConfigured).toBe(true);
   });
 });

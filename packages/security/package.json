@@ -1,0 +1,16 @@
+{
+  "name": "@qa/security",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./redirect": "./src/redirect.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "ipaddr.js": "^2.5.0"
+  }
+}

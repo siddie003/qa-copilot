@@ -1,4 +1,4 @@
-export default function Loading() {
+export function PageSkeleton() {
   return (
     <div role="status" aria-live="polite" className="animate-pulse space-y-4">
       <span className="sr-only">Loading…</span>

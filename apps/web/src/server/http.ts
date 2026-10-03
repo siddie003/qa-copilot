@@ -1,7 +1,16 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
-import { errorFields, getLogger, toProblem, type Logger } from "@qa/core";
+import {
+  AppError,
+  errorFields,
+  getLogger,
+  toProblem,
+  validationError,
+  zodIssues,
+  type Logger,
+} from "@qa/core";
 import { NextResponse, type NextRequest } from "next/server";
+import type { z } from "zod";
 
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9._-]{8,128}$/;
 
@@ -62,4 +71,47 @@ export function json(data: unknown, init: { status?: number } = {}) {
     status: init.status ?? 200,
     headers: { "cache-control": "no-store" },
   });
+}
+
+export const MAX_JSON_BODY_BYTES = 1_000_000;
+
+/** Reads and validates a JSON request body. Rejects oversized, non-JSON and invalid payloads. */
+export async function readJson<T>(req: Request, schema: z.ZodType<T>): Promise<T> {
+  const declared = Number(req.headers.get("content-length") ?? "0");
+  if (declared > MAX_JSON_BODY_BYTES) throw new AppError("PAYLOAD_TOO_LARGE");
+  if (!(req.headers.get("content-type") ?? "").toLowerCase().includes("application/json"))
+    throw validationError("Content-Type must be application/json");
+  const text = await req.text();
+  if (text.length > MAX_JSON_BODY_BYTES) throw new AppError("PAYLOAD_TOO_LARGE");
+  let body: unknown;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    throw validationError("Request body must be valid JSON");
+  }
+  const parsed = schema.safeParse(body);
+  if (!parsed.success) throw validationError("Request validation failed", zodIssues(parsed.error));
+  return parsed.data;
+}
+
+/** Parses query parameters with a zod schema. */
+export function readQuery<T>(req: NextRequest, schema: z.ZodType<T>): T {
+  const parsed = schema.safeParse(Object.fromEntries(req.nextUrl.searchParams));
+  if (!parsed.success) throw validationError("Invalid query parameters", zodIssues(parsed.error));
+  return parsed.data;
+}
+
+const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+
+/**
+ * CSRF defense in depth (cookies are also SameSite=Lax): state-changing requests coming from
+ * a browser must originate from the application's own origin.
+ */
+export function assertSameOrigin(req: Request, appUrl: string): void {
+  if (SAFE_METHODS.has(req.method)) return;
+  if (req.headers.get("sec-fetch-site") === "cross-site")
+    throw new AppError("FORBIDDEN", "Cross-site request rejected");
+  const origin = req.headers.get("origin");
+  if (origin && origin !== new URL(appUrl).origin)
+    throw new AppError("FORBIDDEN", "Cross-origin request rejected");
 }

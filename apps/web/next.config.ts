@@ -23,7 +23,7 @@ const securityHeaders = [
 const nextConfig: NextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
-  transpilePackages: ["@qa/core", "@qa/db"],
+  transpilePackages: ["@qa/core", "@qa/db", "@qa/security"],
   serverExternalPackages: ["pino", "pg"],
   outputFileTracingRoot: repoRoot,
   turbopack: { root: repoRoot },

@@ -21,6 +21,11 @@ Status: **Draft for approval** · Date: 2026-10-03 · Phase: 0 (no functional co
 
 ---
 
+> **Amendments during implementation**
+> - Phase 2: the stable issue id (`ISSUE-<n>`) is stored on `issue_track.display_no` (not on the
+>   per-scan `issue`), and `issue_track` keeps the latest severity/category/title. `project` has
+>   `scan_counter`/`issue_counter`. `packages/security` was created in Phase 2 for URL validation.
+
 ## 1. Architecture diagram
 
 ```

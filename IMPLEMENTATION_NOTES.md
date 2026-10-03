@@ -24,6 +24,32 @@
 - Live scan status: `scanner_run` rows, then Postgres NOTIFY, then SSE (Phase 4).
 - Scanners deterministic and evidence-first; AI only groups/explains; grounding deterministic.
 - `issue_track` (cross-scan status) + `issue` (per-scan occurrence) for scan comparison.
+  The human-readable issue id `ISSUE-<displayNo>` lives on `issue_track`, so it stays stable across
+  rescans; `issue_track` also carries the latest severity/category/title for fast counts.
+  Raw findings get per-scan ids (`SEO-023`).
+- Per-project counters (`project.scan_counter`, `project.issue_counter`) are incremented with
+  `UPDATE ... RETURNING` for gap-tolerant, race-free numbering.
+- Drizzle uses `casing: "snake_case"` in both the client and drizzle-kit config: TS property names
+  are camelCase, columns snake_case. Never pass explicit column names that disagree.
+- `scanner_run.step_key` is varchar, not an enum, so new scanners need no type migration.
+- Projects are soft-deleted (`deleted_at`); repository functions always filter on owner + not deleted.
+- Severity counts in project summaries cover outstanding issues only (open, in progress, reopened).
+
+## Phase 2 decisions
+- Auth: Better Auth 1.7 with the Drizzle adapter; tables hand-written in `packages/db/src/schema/auth.ts`
+  to match Better Auth's core schema. `getAuth()` is lazy (no config needed at build time).
+  `createAuth({ withNextCookies: false })` for tests (the nextCookies plugin needs a request scope).
+- Session checks: `proxy.ts` (cookie presence only) → `(app)/layout.tsx` `requirePageUser()`
+  (database check) → API `authedHandler()` (database check + same-origin check for writes).
+- Loading boundaries (`loading.tsx`) only at leaf routes: a boundary above a layout that calls
+  `notFound()` makes Next.js stream first and return 200 instead of 404.
+- `inputClasses` lives in `components/ui/field-styles.ts` (no "use client") because constants
+  imported from a client module into a server component become client references, not strings.
+- URL validation is static at save time (`@qa/security`); DNS-resolution checks happen at scan
+  time (Phase 4) because DNS answers can change after saving.
+- Integration tests: vitest project `integration` points `DATABASE_URL` at `TEST_DATABASE_URL`,
+  the global setup migrates it and refuses database names not ending in `_test`; tests truncate
+  `"user"` (cascades to everything). Files run sequentially.
 
 ## Environment facts
 - PostgreSQL 18 binaries: `C:\Program Files\PostgreSQL\18\bin` (not on PATH). Service `postgresql-x64-18`.
@@ -31,7 +57,7 @@
 - Project folder: `C:\Users\Siddharth\Downloads\qa-copilot`.
 
 ## Unfinished tasks
-- User to run `npm run db:bootstrap`, then verify `npm run db:check` and readiness = ready.
+- None inside Phase 2. Next: Phase 3 (after approval).
 
 ## Known bugs
 - None known.
@@ -42,6 +68,7 @@ git status && git log --oneline
 npm install
 npm run typecheck && npm run lint && npm test
 npm run db:check
+npm run db:migrate
 npm run dev
 ```
 Read `PROJECT_STATUS.md`, this file and `docs/ARCHITECTURE.md` first.

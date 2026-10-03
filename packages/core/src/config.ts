@@ -22,7 +22,8 @@ export const configSchema = z
     DATABASE_URL: postgresUrl,
     DATABASE_POOL_MAX: int(1, 100).default(10),
 
-    BETTER_AUTH_SECRET: z.string().min(32).optional(),
+    BETTER_AUTH_SECRET: z.string().min(32, "must be at least 32 characters"),
+    AUTH_ALLOW_SIGNUP: bool.default(true),
     ENCRYPTION_KEY: z
       .string()
       .regex(/^[0-9a-fA-F]{64}$/, "must be 64 hex characters (32 bytes)")
@@ -69,10 +70,8 @@ export const configSchema = z
     const require = (variable: string, message: string) =>
       ctx.addIssue({ code: "custom", path: [variable], message });
 
-    if (cfg.NODE_ENV === "production") {
-      if (!cfg.BETTER_AUTH_SECRET) require("BETTER_AUTH_SECRET", "required in production");
-      if (!cfg.ENCRYPTION_KEY) require("ENCRYPTION_KEY", "required in production");
-    }
+    if (cfg.NODE_ENV === "production" && !cfg.ENCRYPTION_KEY)
+      require("ENCRYPTION_KEY", "required in production");
     if (cfg.AI_PROVIDER === "anthropic" && !cfg.ANTHROPIC_API_KEY)
       require("ANTHROPIC_API_KEY", "required when AI_PROVIDER=anthropic");
     if (cfg.AI_PROVIDER === "openai-compatible" && !cfg.OPENAI_API_KEY)
@@ -146,7 +145,7 @@ export function describeConfig(cfg: AppConfig) {
     aiModel: cfg.AI_MODEL ?? null,
     aiConfigured: cfg.AI_PROVIDER !== "none",
     figmaConfigured: Boolean(cfg.FIGMA_ACCESS_TOKEN),
-    authSecretConfigured: Boolean(cfg.BETTER_AUTH_SECRET),
+    signupEnabled: cfg.AUTH_ALLOW_SIGNUP,
     encryptionKeyConfigured: Boolean(cfg.ENCRYPTION_KEY),
     scanLimits: {
       maxPages: cfg.SCAN_MAX_PAGES,

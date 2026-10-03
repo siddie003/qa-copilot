@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/cn";
 import { MAIN_NAV, isActive } from "./nav-items";
+import { UserMenu } from "./user-menu";
 
 function Brand() {
   return (
@@ -47,7 +48,13 @@ function NavList({ pathname, onNavigate }: { pathname: string; onNavigate?: () =
   );
 }
 
-export function AppShell({ children }: { children: React.ReactNode }) {
+export function AppShell({
+  user,
+  children,
+}: {
+  user: { name: string; email: string };
+  children: React.ReactNode;
+}) {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
@@ -74,11 +81,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </a>
 
       {/* Desktop sidebar */}
-      <aside className="hidden bg-sidebar lg:flex lg:flex-col lg:gap-6 lg:px-3 lg:py-5">
+      <aside className="hidden bg-sidebar lg:sticky lg:top-0 lg:flex lg:h-dvh lg:flex-col lg:gap-6 lg:px-3 lg:py-5">
         <Brand />
-        <nav aria-label="Main">
+        <nav aria-label="Main" className="flex-1">
           <NavList pathname={pathname} />
         </nav>
+        <UserMenu user={user} />
       </aside>
 
       {/* Mobile top bar + drawer */}
@@ -103,6 +111,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       {mobileOpen && (
         <nav id="mobile-nav" aria-label="Main" className="bg-sidebar px-3 pb-4 lg:hidden">
           <NavList pathname={pathname} onNavigate={() => setMobileOpen(false)} />
+          <div className="mt-4">
+            <UserMenu user={user} />
+          </div>
         </nav>
       )}
 

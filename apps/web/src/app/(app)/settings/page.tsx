@@ -110,8 +110,8 @@ export default async function SettingsPage() {
                   ? "Token configured"
                   : "Not configured (manual design input available)"}
               </Row>
-              <Row label="Auth secret">
-                {summary.authSecretConfigured ? "Configured" : "Missing"}
+              <Row label="New account sign-up">
+                {summary.signupEnabled ? "Enabled" : "Disabled"}
               </Row>
               <Row label="Encryption key">
                 {summary.encryptionKeyConfigured ? "Configured" : "Missing"}
