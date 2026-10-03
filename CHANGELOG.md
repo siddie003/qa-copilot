@@ -2,6 +2,35 @@
 
 ## [Unreleased]
 
+### Phase 5: Six QA scanners (2026-10-03)
+#### Added
+- `packages/scanners`: scanner contract (validated findings with mandatory evidence, check
+  summaries with inconclusive checks), registry and six scanners: accessibility (axe-core + keyboard
+  focus), security (passive configuration checks), SEO, broken links/mixed content, performance (lab
+  Core Web Vitals and budgets), responsive/visual (layout measurements + live mobile-menu test).
+- Capture collects lab Core Web Vitals (PerformanceObserver) and layout/image/render-blocking
+  metrics; stored in `page_capture.metrics`.
+- Findings persisted with per-scan display ids (A11Y-001 …), evidence rows and stable fingerprints;
+  scanner check summaries in `scanner_run.checks`.
+- Findings view with filters and evidence; findings counts on the scan page, Scanner results tab and
+  dashboard; findings API.
+- Fixture website: documented defects for every scanner, Basic-auth members area, slow page,
+  valid generated PNG.
+#### Changed
+- Capture runs viewports in parallel and skips redirect duplicates; accessibility analysis runs
+  three pages at a time (full fixture scan ~108 s → ~38 s).
+- Redirecting URLs that reach an already-analyzed page are analyzed once (no duplicate findings).
+
+### Phase 4 fixes (2026-10-03)
+#### Fixed
+- DNS-rebinding gap in Chromium closed with a local guard proxy.
+- Bare `localhost:PORT` input defaults to http://; HTTPS handshake failures explain the scheme.
+- `from_cache` stored as NULL (unknown) instead of false.
+#### Added
+- Site authentication (HTTP Basic, custom header, cookies), encrypted per project, sent to the
+  scanned site only; settings UI and wizard step; scan-auth API.
+- `WORKER_CONCURRENCY` for parallel scans per worker.
+
 ### Phase 4: Crawler, browser automation and live scans (2026-10-03)
 #### Added
 - Scan-time SSRF protection: DNS checks before every request and redirect hop, connect-time

@@ -50,11 +50,21 @@ test("start a QA scan from the UI and watch it complete with live status", async
   const progress = page
     .getByRole("region", { name: "Progress" })
     .or(page.locator("section", { hasText: "Progress" }).first());
-  for (const step of ["Preparing website", "Crawling pages", "Browser capture"]) {
-    await expect(progress.locator("li", { hasText: step })).toContainText("Completed");
+  for (const step of [
+    "Preparing website",
+    "Crawling pages",
+    "Browser capture",
+    "Accessibility",
+    "Security",
+    "SEO",
+    "Broken links / mixed content",
+    "Performance",
+    "Responsive / visual",
+  ]) {
+    await expect(progress.locator("li", { hasText: step }).first()).toContainText("Completed");
   }
-  await expect(progress.locator("li", { hasText: "SEO" })).toContainText("Skipped");
-  await expect(progress.locator("li", { hasText: "SEO" })).toContainText("Phase 5");
+  await expect(progress.locator("li", { hasText: "AI analysis" })).toContainText("Skipped");
+  await expect(progress.locator("li", { hasText: "AI analysis" })).toContainText("Phase 7");
   await expect(page.getByText("Could not determine", { exact: true })).toBeVisible();
 
   // Screenshots are served through the authenticated artifact endpoint and actually load.
@@ -71,6 +81,28 @@ test("start a QA scan from the UI and watch it complete with live status", async
     .withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"])
     .analyze();
   expect(a11y.violations.map((v) => `${v.id} (${v.impact})`)).toEqual([]);
+
+  // Findings page: real scanner findings with expandable evidence.
+  await page.getByRole("link", { name: /^View \d+ findings?$/ }).click();
+  await page.waitForURL(/\/findings$/);
+  await expect(page.getByRole("heading", { name: /Findings · Scan #1/ })).toBeVisible();
+  const httpFinding = page.locator("details", { hasText: "Site is not served over HTTPS" });
+  await httpFinding.locator("summary").click();
+  await expect(httpFinding.getByText("Evidence")).toBeVisible();
+  await expect(httpFinding.getByText("http://localhost:4100/").first()).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Checks that could not be verified" }),
+  ).toBeVisible();
+  const findingsA11y = await new AxeBuilder({ page })
+    .withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"])
+    .analyze();
+  expect(findingsA11y.violations.map((v) => `${v.id} (${v.impact})`)).toEqual([]);
+
+  // Filter by scanner.
+  await page.getByLabel("Scanner").selectOption("security");
+  await page.getByRole("button", { name: "Apply" }).click();
+  await page.waitForURL(/scanner=security/);
+  await expect(page.locator("details summary").first()).toContainText("SEC-");
 
   // Pages tab lists the crawled pages (6 = the configured page limit) with HTTP status.
   await page.goto(`/projects/${projectId}/pages`);

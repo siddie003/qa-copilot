@@ -5,7 +5,7 @@ import { Square } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { StepStatus } from "@/components/ui/badges";
-import { Button } from "@/components/ui/button";
+import { Button, buttonClasses } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Card } from "@/components/ui/stat";
 import { StatusPill } from "@/components/ui/status-pill";
@@ -152,6 +152,7 @@ export function LiveScan({
   }
 
   const running = !TERMINAL.has(scan.status);
+  const totalFindings = scan.runs.reduce((sum, r) => sum + (r.findingCount ?? 0), 0);
   const elapsed = scan.startedAt
     ? (scan.finishedAt ? new Date(scan.finishedAt) : new Date()).getTime() -
       new Date(scan.startedAt).getTime()
@@ -196,12 +197,22 @@ export function LiveScan({
             {transport === "done" && "Final results."}
           </p>
         </div>
-        {running && !scan.cancelRequestedAt && (
-          <Button variant="secondary" onClick={() => setCancelOpen(true)}>
-            <Square aria-hidden className="size-4" />
-            Cancel scan
-          </Button>
-        )}
+        <div className="flex flex-wrap gap-2">
+          {totalFindings > 0 && (
+            <Link
+              href={`/projects/${projectId}/scans/${scan.id}/findings`}
+              className={buttonClasses(running ? "secondary" : "primary")}
+            >
+              View {totalFindings} finding{totalFindings === 1 ? "" : "s"}
+            </Link>
+          )}
+          {running && !scan.cancelRequestedAt && (
+            <Button variant="secondary" onClick={() => setCancelOpen(true)}>
+              <Square aria-hidden className="size-4" />
+              Cancel scan
+            </Button>
+          )}
+        </div>
       </div>
 
       {scan.error && (
@@ -227,6 +238,14 @@ export function LiveScan({
                   {r.error ? <span className="text-danger">{r.error}</span> : r.statusReason}
                   {r.durationMs !== null && r.status !== "skipped" && (
                     <span className="text-subtle"> · {formatDuration(r.durationMs)}</span>
+                  )}
+                  {r.findingCount > 0 && (
+                    <Link
+                      href={`/projects/${projectId}/scans/${scan.id}/findings?scanner=${r.stepKey}`}
+                      className="block text-xs font-medium text-primary hover:underline"
+                    >
+                      {r.findingCount} finding{r.findingCount === 1 ? "" : "s"}
+                    </Link>
                   )}
                   {r.toolName && (
                     <span className="block text-xs text-subtle">

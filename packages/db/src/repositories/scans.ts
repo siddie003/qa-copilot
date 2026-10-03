@@ -75,6 +75,7 @@ export interface ScannerRunRow {
   startedAt: Date | null;
   finishedAt: Date | null;
   durationMs: number | null;
+  checks: Record<string, unknown> | null;
 }
 
 export async function listScannerRuns(db: Database, scanId: string): Promise<ScannerRunRow[]> {
@@ -92,6 +93,7 @@ export async function listScannerRuns(db: Database, scanId: string): Promise<Sca
       startedAt: scannerRun.startedAt,
       finishedAt: scannerRun.finishedAt,
       durationMs: scannerRun.durationMs,
+      checks: scannerRun.checks,
     })
     .from(scannerRun)
     .where(eq(scannerRun.scanId, scanId))

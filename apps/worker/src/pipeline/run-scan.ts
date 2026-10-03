@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import {
   authHeadersFor,
   errorFields,
+  SCANNER_KEYS,
   scanAuthSchema,
   type AppConfig,
   type Logger,
@@ -25,6 +26,7 @@ import {
   type RobotsRules,
 } from "@qa/crawler";
 import { pipelineRepo, secretsRepo, type Database } from "@qa/db";
+import { SCANNERS, type ScannerContext } from "@qa/scanners";
 import {
   assertPublicTarget,
   BlockedTargetError,
@@ -35,6 +37,7 @@ import {
   type TargetPolicy,
 } from "@qa/security";
 import type { Storage } from "@qa/storage";
+import { buildScannerContext, runScannerStep, type ScannerEnv } from "./scanner-steps";
 
 export interface ScanRuntime {
   db: Database;
@@ -53,6 +56,8 @@ type StepOutcome = {
   findingCount?: number;
   toolName?: string;
   toolVersion?: string;
+  /** Scanner summary of what was checked (stored on the step). */
+  checks?: Record<string, unknown>;
   /** A fatal outcome stops the scan: remaining steps are skipped with this reason. */
   fatal?: string;
 };
@@ -188,6 +193,7 @@ export async function runScan(
       findingCount: outcome.findingCount,
       toolName: outcome.toolName,
       toolVersion: outcome.toolVersion,
+      checks: outcome.checks,
       finished: true,
     });
     slog.info(
@@ -206,6 +212,18 @@ export async function runScan(
     await runStep("preflight", () => preflight(rt, state));
     await runStep("crawl", () => crawlStep(rt, state));
     await runStep("capture", () => captureStep(rt, state));
+    // QA scanners: each one is an independent step; a failing scanner does not stop the others.
+    if (!fatal && !cancelled) {
+      const env = scannerEnv(rt, state);
+      let ctx: ScannerContext | null = null;
+      for (const key of SCANNER_KEYS) {
+        if (!snapshot.scanners.includes(key)) continue;
+        await runStep(key, async () => {
+          ctx ??= await buildScannerContext(env);
+          return runScannerStep(env, SCANNERS[key], ctx);
+        });
+      }
+    }
   } finally {
     clearInterval(beat);
     await state.browser?.close().catch(() => {});
@@ -342,12 +360,30 @@ async function preflight(rt: ScanRuntime, s: ScanState): Promise<StepOutcome> {
       ? `technology: ${tech.map((t) => `${t.name} (${t.confidence})`).join(", ")}`
       : "technology: could not determine",
   );
+  if (s.credentials) parts.push(`site credentials: ${s.credentials.type} (sent to this site only)`);
   if (s.robots)
     parts.push(
       `robots.txt: ${s.robots.status === "found" ? "found" : s.robots.status === "missing" ? "not present (all allowed)" : "unreachable (crawling disallowed per RFC 9309)"}`,
     );
   else parts.push("robots.txt: ignored by project setting");
   return { status: "completed", statusReason: parts.join("; ") };
+}
+
+/** Everything a scanner step needs; contexts reuse the scan's guarded browser and credentials. */
+function scannerEnv(rt: ScanRuntime, s: ScanState): ScannerEnv {
+  return {
+    db: rt.db,
+    storage: rt.storage,
+    log: rt.log.child({ scanId: s.scanId }),
+    scanId: s.scanId,
+    siteUrl: s.siteUrl,
+    viewports: s.snapshot.viewports,
+    robots: s.robots,
+    fetch: { ...s.fetchOpts, signal: s.abort.signal },
+    signal: s.abort.signal,
+    pageTimeoutMs: s.snapshot.pageTimeoutMs,
+    openContext: (viewport) => openContext(rt, s, viewport),
+  };
 }
 
 /** One Chromium per scan; all its traffic goes through the guard proxy (no own DNS lookups). */
@@ -450,7 +486,20 @@ async function crawlStep(rt: ScanRuntime, s: ScanState): Promise<StepOutcome> {
 
 async function captureStep(rt: ScanRuntime, s: ScanState): Promise<StepOutcome> {
   const browser = await ensureBrowser(rt, s);
-  const pages = await pipelineRepo.listCapturablePages(rt.db, s.scanId);
+  const capturable = await pipelineRepo.listCapturablePages(rt.db, s.scanId);
+  // A URL that redirects to a page already in the list is the same document: capture it once,
+  // preferring the URL that was reached directly.
+  const seenTargets = new Set<string>();
+  const pages = [...capturable]
+    .sort(
+      (a, b) => Number(Boolean(a.redirectChain?.length)) - Number(Boolean(b.redirectChain?.length)),
+    )
+    .filter((p) => {
+      const key = normalizeUrl(p.finalUrl ?? p.url) ?? p.url;
+      if (seenTargets.has(key)) return false;
+      seenTargets.add(key);
+      return true;
+    });
   if (pages.length === 0)
     return {
       status: "inconclusive",
@@ -459,55 +508,63 @@ async function captureStep(rt: ScanRuntime, s: ScanState): Promise<StepOutcome> 
   let ok = 0;
   let failed = 0;
   const failures: string[] = [];
-  for (const viewport of s.snapshot.viewports) {
-    const { context, guard } = await openContext(rt, s, viewport);
-    try {
-      for (const p of pages) {
-        if (s.abort.signal.aborted) throw new CancelledError();
-        const target = p.finalUrl ?? p.url;
-        const r = await capturePage(context, guard, target, viewport, {
-          timeoutMs: s.snapshot.pageTimeoutMs,
-          screenshot: true,
-          proxy: browser.proxy,
-        });
-        const base = `scans/${s.scanId}/pages/${p.id}/${viewport.name}`;
-        const screenshotKey = r.screenshot
-          ? (await rt.storage.put(`${base}.png`, r.screenshot)).key
-          : null;
-        const domSnapshotKey = r.html ? (await rt.storage.put(`${base}.html`, r.html)).key : null;
-        await pipelineRepo.insertCapture(rt.db, {
-          pageId: p.id,
-          viewport: viewport.name,
-          width: viewport.width,
-          height: viewport.height,
-          screenshotKey,
-          domSnapshotKey,
-          consoleMessages: [
-            ...r.console.map((c) => ({ ...c })),
-            ...r.pageErrors.map((e) => ({ type: "pageerror", text: e, location: null })),
-          ],
-          timings: {
-            ...r.timings,
-            finalUrl: r.finalUrl,
-            status: r.status,
-            screenshotTruncated: r.screenshotTruncated,
-            blockedRequests: r.blockedRequests,
-          },
-          error: r.error,
-          requests: r.requests,
-        });
-        if (r.error) {
-          failed += 1;
-          if (failures.length < 5) failures.push(`${viewport.name} ${target}: ${r.error}`);
-        } else ok += 1;
+  // Viewports are captured in parallel, each in its own context (one page at a time per
+  // context, so blocked-request evidence stays attributed to the right page).
+  const lanes = await Promise.allSettled(
+    s.snapshot.viewports.map(async (viewport) => {
+      const { context, guard } = await openContext(rt, s, viewport);
+      try {
+        for (const p of pages) {
+          if (s.abort.signal.aborted) throw new CancelledError();
+          const target = p.finalUrl ?? p.url;
+          const r = await capturePage(context, guard, target, viewport, {
+            timeoutMs: s.snapshot.pageTimeoutMs,
+            screenshot: true,
+            proxy: browser.proxy,
+          });
+          const base = `scans/${s.scanId}/pages/${p.id}/${viewport.name}`;
+          const screenshotKey = r.screenshot
+            ? (await rt.storage.put(`${base}.png`, r.screenshot)).key
+            : null;
+          const domSnapshotKey = r.html ? (await rt.storage.put(`${base}.html`, r.html)).key : null;
+          await pipelineRepo.insertCapture(rt.db, {
+            pageId: p.id,
+            viewport: viewport.name,
+            width: viewport.width,
+            height: viewport.height,
+            screenshotKey,
+            domSnapshotKey,
+            consoleMessages: [
+              ...r.console.map((c) => ({ ...c })),
+              ...r.pageErrors.map((e) => ({ type: "pageerror", text: e, location: null })),
+            ],
+            metrics: r.metrics,
+            timings: {
+              ...r.timings,
+              finalUrl: r.finalUrl,
+              status: r.status,
+              screenshotTruncated: r.screenshotTruncated,
+              blockedRequests: r.blockedRequests,
+            },
+            error: r.error,
+            requests: r.requests,
+          });
+          if (r.error) {
+            failed += 1;
+            if (failures.length < 5) failures.push(`${viewport.name} ${target}: ${r.error}`);
+          } else ok += 1;
+        }
+      } finally {
+        await context.close().catch(() => {});
       }
-    } finally {
-      await context.close().catch(() => {});
-    }
-    await pipelineRepo.notifyScan(rt.db, s.scanId);
-  }
+      await pipelineRepo.notifyScan(rt.db, s.scanId);
+    }),
+  );
+  const laneError = lanes.find((l): l is PromiseRejectedResult => l.status === "rejected");
+  if (laneError) throw laneError.reason;
   const total = ok + failed;
-  const reason = `${ok} of ${total} page captures succeeded across ${s.snapshot.viewports.length} viewport${s.snapshot.viewports.length === 1 ? "" : "s"} (${s.snapshot.viewports.map((v) => v.name).join(", ")})`;
+  const skippedDuplicates = capturable.length - pages.length;
+  const reason = `${ok} of ${total} page captures succeeded${skippedDuplicates ? ` (${skippedDuplicates} redirecting URL${skippedDuplicates === 1 ? "" : "s"} not captured twice)` : ""} across ${s.snapshot.viewports.length} viewport${s.snapshot.viewports.length === 1 ? "" : "s"} (${s.snapshot.viewports.map((v) => v.name).join(", ")})`;
   if (ok === 0)
     return {
       status: "failed",

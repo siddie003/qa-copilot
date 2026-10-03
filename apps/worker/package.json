@@ -15,7 +15,9 @@
     "@qa/crawler": "0.1.0",
     "@qa/security": "0.1.0",
     "@qa/storage": "0.1.0",
-    "pg": "^8.23.1"
+    "pg": "^8.23.1",
+    "@qa/scanners": "0.1.0",
+    "playwright": "^1.63.0"
   },
   "devDependencies": {
     "@types/pg": "^8.23.1"

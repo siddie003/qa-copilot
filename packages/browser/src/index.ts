@@ -6,6 +6,7 @@ import {
 } from "@qa/security";
 import { authHeadersFor, isOnSite, parseCookieString, type ScanAuth } from "@qa/core";
 import { chromium, type Browser, type BrowserContext, type Page, type Request } from "playwright";
+import { METRICS_SCRIPT, VITALS_INIT_SCRIPT } from "./page-scripts";
 import { startGuardProxy, type GuardProxy } from "./proxy";
 
 export { startGuardProxy, type GuardProxy };
@@ -148,6 +149,8 @@ export async function newGuardedContext(session: BrowserSession, opts: ContextOp
       })),
     );
   }
+  // Lab Core Web Vitals observers must exist before any page script runs.
+  await context.addInitScript({ content: VITALS_INIT_SCRIPT });
   const guard: GuardState = { blocked: [] };
   await installNetworkGuard(context, opts.policy, opts.resolve, guard, opts.auth);
   return { context, guard };
@@ -186,6 +189,8 @@ export interface PageCaptureResult {
   requests: CapturedRequest[];
   blockedRequests: GuardState["blocked"];
   timings: Record<string, number | null>;
+  /** In-page measurements (vitals, layout, images, render-blocking); see page-scripts.ts. */
+  metrics: Record<string, unknown> | null;
   /** Absolute hrefs of <a>/<area> elements in the rendered DOM. */
   renderedLinks: string[];
   error: string | null;
@@ -298,6 +303,7 @@ export async function capturePage(
     requests: collectors.requests,
     blockedRequests: [],
     timings: {},
+    metrics: null,
     renderedLinks: [],
     error: null,
   };
@@ -312,6 +318,7 @@ export async function capturePage(
     base.title = (await page.title()) || null;
     base.html = await page.content();
     base.timings = (await page.evaluate(TIMINGS_SCRIPT)) as Record<string, number | null>;
+    base.metrics = (await page.evaluate(METRICS_SCRIPT)) as Record<string, unknown>;
     base.renderedLinks = await page.$$eval("a[href], area[href]", (els) =>
       els.map((e) => (e as HTMLAnchorElement).href).filter((h) => /^https?:/i.test(h)),
     );

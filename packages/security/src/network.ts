@@ -14,11 +14,14 @@ export type BlockReason = "UNSUPPORTED_SCHEME" | "PRIVATE_ADDRESS" | "DNS_FAILUR
 export class BlockedTargetError extends Error {
   readonly code: BlockReason;
   readonly host: string;
-  constructor(code: BlockReason, host: string, message: string) {
+  /** For DNS failures: the resolver error code (ENOTFOUND = no such host, EAI_AGAIN = temporary). */
+  readonly dnsCode: string | null;
+  constructor(code: BlockReason, host: string, message: string, dnsCode: string | null = null) {
     super(message);
     this.name = "BlockedTargetError";
     this.code = code;
     this.host = host;
+    this.dnsCode = dnsCode;
   }
 }
 
@@ -52,14 +55,16 @@ async function lookupAll(host: string, resolve: Resolver): Promise<LookupAddress
   try {
     addresses = await resolve(host);
   } catch (err) {
+    const dnsCode = (err as NodeJS.ErrnoException).code ?? null;
     throw new BlockedTargetError(
       "DNS_FAILURE",
       host,
-      `Host ${host} could not be resolved (${(err as NodeJS.ErrnoException).code ?? "error"})`,
+      `Host ${host} could not be resolved (${dnsCode ?? "error"})`,
+      dnsCode,
     );
   }
   if (addresses.length === 0)
-    throw new BlockedTargetError("DNS_FAILURE", host, `Host ${host} has no addresses`);
+    throw new BlockedTargetError("DNS_FAILURE", host, `Host ${host} has no addresses`, "ENODATA");
   return addresses;
 }
 

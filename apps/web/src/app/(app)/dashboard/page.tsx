@@ -86,6 +86,19 @@ export default async function DashboardPage() {
               />
             ))}
           </div>
+          {d.latestScan && d.latestScan.findingCount > 0 && c.total === 0 && (
+            <p className="mt-2 text-xs text-muted">
+              The latest scan produced{" "}
+              <Link
+                href={`/projects/${d.latestScan.projectId}/scans/${d.latestScan.id}/findings`}
+                className="font-medium text-primary hover:underline"
+              >
+                {d.latestScan.findingCount} scanner findings
+              </Link>
+              . Issues (with status tracking across scans) are created from findings in a later
+              phase, so issue counts are zero until then.
+            </p>
+          )}
           {c.inconclusive > 0 && (
             <p className="mt-2 text-xs text-muted">
               {c.inconclusive} inconclusive check{c.inconclusive === 1 ? "" : "s"} could not be
@@ -124,7 +137,17 @@ export default async function DashboardPage() {
                       >
                         <span>{stepLabel(key)}</span>
                         {run ? (
-                          <StepStatus status={run.status} />
+                          <span className="flex items-center gap-3">
+                            {run.findingCount > 0 && d.latestScan && (
+                              <Link
+                                href={`/projects/${d.latestScan.projectId}/scans/${d.latestScan.id}/findings?scanner=${key}`}
+                                className="text-xs text-primary hover:underline"
+                              >
+                                {run.findingCount} finding{run.findingCount === 1 ? "" : "s"}
+                              </Link>
+                            )}
+                            <StepStatus status={run.status} />
+                          </span>
                         ) : (
                           <span className="text-subtle">Not run in this scan</span>
                         )}

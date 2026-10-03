@@ -1,7 +1,7 @@
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { startDemoSite } from "../../../fixtures/demo-site/server.mjs";
+import { HERO_PNG_BYTES, startDemoSite } from "../../../fixtures/demo-site/server.mjs";
 import {
   capturePage,
   launchBrowser,
@@ -62,9 +62,10 @@ describe("browser capture", () => {
     expect(
       r.console.some((c) => c.type === "error" && c.text.includes("intentional console error")),
     ).toBe(true);
-    const hero = r.requests.find((q) => q.url.endsWith("/images/hero.jpg"));
+    const hero = r.requests.find((q) => q.url.endsWith("/images/hero.png"));
     expect(hero).toMatchObject({ resourceType: "image", status: 200 });
-    expect(hero!.decodedSize).toBe(300 * 1024);
+    expect(hero!.decodedSize).toBe(HERO_PNG_BYTES);
+    expect(r.metrics).toMatchObject({ vitals: expect.any(Object), images: expect.any(Array) });
     expect(
       r.requests.some((q) => q.url.endsWith("/assets/site.css") && q.resourceType === "stylesheet"),
     ).toBe(true);

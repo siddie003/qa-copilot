@@ -100,8 +100,9 @@ describe.skipIf(!hasTestDb)("scan API (route handlers, real database)", () => {
       "capture",
     ]);
     expect(detail.runs.find((r: { stepKey: string }) => r.stepKey === "seo").status).toBe(
-      "skipped",
+      "pending",
     );
+    expect(detail.runs.find((r: { stepKey: string }) => r.stepKey === "ai").status).toBe("skipped");
 
     expect(
       (await scanRoute.GET(req(`/api/v1/scans/${scanId}`, bob), p({ id: scanId }))).status,

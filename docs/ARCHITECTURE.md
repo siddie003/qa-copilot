@@ -22,6 +22,14 @@ Status: **Draft for approval** · Date: 2026-10-03 · Phase: 0 (no functional co
 ---
 
 > **Amendments during implementation**
+> - Phase 5: scanners live in `packages/scanners`, consume stored crawl/capture data through a
+>   read-only `ScannerContext` (plus `openPage` for live checks: axe, keyboard focus, mobile menu)
+>   and return validated findings (zod, evidence required). Lab Core Web Vitals and layout metrics
+>   are collected once during capture. Redirecting URLs that reach an already-analyzed document are
+>   analyzed once. Lighthouse was not used: the same lab metrics come from Chromium's
+>   PerformanceObserver APIs without a second browser.
+> - Phase 4 fixes: Chromium traffic goes through a local guard proxy (no DNS in Chromium); site
+>   credentials (Basic/header/cookies) encrypted per project in `project_secret`.
 > - Phase 4: **no pg-boss.** The `scan` row is the durable job: the web app inserts it as
 >   `queued` and NOTIFYs `scan_queued`; workers claim rows with `UPDATE ... FOR UPDATE SKIP LOCKED`,
 >   send heartbeats, honor `cancel_requested_at`, and stale `running` scans are failed on worker

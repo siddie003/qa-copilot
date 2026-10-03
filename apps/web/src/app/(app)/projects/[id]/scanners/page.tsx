@@ -2,6 +2,7 @@ import { stepLabel } from "@qa/core";
 import { getDb, scansRepo } from "@qa/db";
 import { Gauge } from "lucide-react";
 import type { Metadata } from "next";
+import Link from "next/link";
 import { StepStatus } from "@/components/ui/badges";
 import { EmptyState } from "@/components/ui/empty-state";
 import { formatDateTime, formatDuration } from "@/lib/format";
@@ -26,7 +27,19 @@ export default async function ScannerResultsPage({ params }: { params: Promise<{
   return (
     <>
       <p className="mb-3 text-sm text-muted">
-        Scan #{latest.number} · started {formatDateTime(latest.startedAt ?? latest.createdAt)}
+        <Link
+          href={`/projects/${project.id}/scans/${latest.id}`}
+          className="text-primary hover:underline"
+        >
+          Scan #{latest.number}
+        </Link>{" "}
+        · started {formatDateTime(latest.startedAt ?? latest.createdAt)} ·{" "}
+        <Link
+          href={`/projects/${project.id}/scans/${latest.id}/findings`}
+          className="text-primary hover:underline"
+        >
+          all findings and unverified checks
+        </Link>
       </p>
       <div
         role="region"
@@ -65,7 +78,18 @@ export default async function ScannerResultsPage({ params }: { params: Promise<{
                 <td className="px-4 py-3">
                   <StepStatus status={r.status} />
                 </td>
-                <td className="px-4 py-3 text-right tabular-nums">{r.findingCount}</td>
+                <td className="px-4 py-3 text-right tabular-nums">
+                  {r.findingCount > 0 ? (
+                    <Link
+                      href={`/projects/${project.id}/scans/${latest.id}/findings?scanner=${r.stepKey}`}
+                      className="text-primary hover:underline"
+                    >
+                      {r.findingCount}
+                    </Link>
+                  ) : (
+                    r.findingCount
+                  )}
+                </td>
                 <td className="px-4 py-3 text-muted">{formatDuration(r.durationMs)}</td>
                 <td className="px-4 py-3 text-muted">
                   {r.toolName ? `${r.toolName}${r.toolVersion ? ` ${r.toolVersion}` : ""}` : "—"}
@@ -75,6 +99,12 @@ export default async function ScannerResultsPage({ params }: { params: Promise<{
                     <span className="text-danger">{r.error}</span>
                   ) : (
                     (r.statusReason ?? "—")
+                  )}
+                  {r.checks && typeof r.checks.evaluated === "number" && (
+                    <span className="mt-1 block text-xs text-subtle">
+                      {r.checks.evaluated} checks evaluated ·{" "}
+                      {Number(r.checks.inconclusiveTotal ?? 0)} could not be verified
+                    </span>
                   )}
                 </td>
               </tr>

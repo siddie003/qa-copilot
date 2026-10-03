@@ -4,7 +4,7 @@ AI-powered website QA, design and brand compliance platform. You provide a desig
 (Figma or brand guidelines), approved content and a website URL; QA Copilot crawls the site,
 runs evidence-based QA scanners, and turns the findings into developer-ready issues and reports.
 
-> **Status:** Phase 4 (crawler, browser automation, live scans). QA scanners arrive in Phase 5. See [PROJECT_STATUS.md](PROJECT_STATUS.md) and
+> **Status:** Phase 5 (six QA scanners). Figma/content comparison follows in Phase 6. See [PROJECT_STATUS.md](PROJECT_STATUS.md) and
 > [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). A full README (Docker, deployment, scanners, AI
 > configuration) is completed in Phase 10.
 
@@ -56,11 +56,27 @@ npm run start:worker
 2. Open a project, go to **Scan**, confirm you are authorized to test the site, then **Start QA Scan**.
 3. The scan page shows live progress from the worker (Server-Sent Events, polling fallback).
 
-What a scan does today: preflight (URL safety checks, reachability, robots.txt, technology
-detection), crawl (same-site pages within the page/depth limits, redirects, HTTP status, links
-rendered by JavaScript), browser capture (every page at every viewport: screenshot, rendered DOM,
-network requests, console). QA scanners, AI analysis and reports are shown as "skipped" with the
-phase that implements them.
+What a scan does: preflight (URL safety checks, reachability, robots.txt, technology detection,
+site credentials) → crawl (same-site pages within the page/depth limits, redirects, HTTP status,
+links rendered by JavaScript) → browser capture (every page at every viewport: screenshot,
+rendered DOM, network, console, lab Core Web Vitals, layout measurements) → six QA scanners:
+
+| Scanner | What it checks | Tooling |
+|---|---|---|
+| Accessibility | WCAG 2.2 A/AA + best practices per page and viewport; visible keyboard focus | axe-core |
+| Security | HTTPS, HSTS, CSP, nosniff, framing, Referrer/Permissions-Policy, cookies, version disclosure, insecure forms, SRI, exposed credentials (passive only) | built-in |
+| SEO | Titles, descriptions, headings, indexability, canonical, lang, viewport, alt, Open Graph, JSON-LD, duplicates, URL hygiene, robots.txt, sitemap | built-in |
+| Broken links / mixed content | Every unique link (HEAD→GET, retries; confirmed vs temporary vs inconclusive), redirect chains, failed resources, mixed content | built-in |
+| Performance | LCP, CLS, TBT (approx.), TTFB, FCP vs Google thresholds; page weight, JS/CSS, large/oversized images, render-blocking | Chromium performance APIs |
+| Responsive / visual | Horizontal overflow, clipped text, overlapping controls, touch targets, small text, images; live mobile-menu test | built-in |
+
+Every finding carries evidence (HTML snippet, headers, measurements, screenshots). Checks that
+cannot be verified are listed as such, never reported as passes or problems. Findings are shown
+on the scan page and its findings view. AI grouping, design/content comparison and reports are
+shown as "skipped" with the phase that implements them.
+
+Login-protected sites: add site credentials in project settings (HTTP Basic, a custom header or
+cookies). They are encrypted with `ENCRYPTION_KEY` and sent to the scanned site only.
 
 To try it locally, run the controlled fixture website and scan `http://localhost:4100`
 (allowlisted by default in `.env.example`):
@@ -99,6 +115,11 @@ All `/api/v1` endpoints except health checks require a session cookie (sign in v
 | GET | `/api/v1/projects/:id/references` | Design references of a project |
 | POST | `/api/v1/projects/:id/references` | Add a Figma link `{ figmaUrl }` (stored as pending) |
 | GET | `/api/v1/dashboard/summary` | Dashboard figures computed from stored records |
+| GET/PUT/DELETE | `/api/v1/projects/:id/scan-auth` | Site credentials (write-only; GET returns a summary) |
+| POST | `/api/v1/projects/:id/scans` | Start a scan `{ authorizationAttested: true }` |
+| GET | `/api/v1/scans/:id`, `/events` (SSE), `/captures`, `/findings` | Scan status, live events, captures, findings |
+| POST | `/api/v1/scans/:id/cancel` | Cancel a queued or running scan |
+| GET | `/api/v1/artifacts/:key` | Screenshot/snapshot (owner only) |
 
 `POST /api/v1/projects` also accepts an optional `figmaUrl`, saved in the same transaction.
 
@@ -150,6 +171,7 @@ packages/security  URL validation, DNS/connect-time SSRF guard, safe redirects
 packages/crawler   HTTP fetcher, URL normalization, robots.txt, crawl loop, technology detection
 packages/browser   Playwright capture with an in-browser network guard
 packages/storage   Artifact storage (screenshots, HTML snapshots)
+packages/scanners  The six QA scanners (contract, registry, rules)
 fixtures/demo-site Controlled test website (see its README)
 scripts/           Environment and database bootstrap scripts
 tests/             Integration test setup, HTTP smoke tests

@@ -42,7 +42,7 @@ export interface FetchResult {
   durationMs: number;
   attempts: number;
   /** Set when no HTTP response was obtained (or the target was blocked). */
-  error: { code: string; message: string; transient: boolean } | null;
+  error: { code: string; message: string; transient: boolean; dnsCode?: string | null } | null;
 }
 
 const TRANSIENT_STATUS = new Set([502, 503, 504]);
@@ -189,7 +189,8 @@ export async function guardedFetch(url: string, opts: FetchOptions): Promise<Fet
         return emptyResult(url, attempt, {
           code: err.code,
           message: err.message,
-          transient: err.code === "DNS_FAILURE",
+          transient: err.code === "DNS_FAILURE" && err.dnsCode !== "ENOTFOUND",
+          dnsCode: err.dnsCode,
         });
       }
       const e = err as NodeJS.ErrnoException & { cause?: { code?: string } };

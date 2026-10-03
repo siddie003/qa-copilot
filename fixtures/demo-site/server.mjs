@@ -1,21 +1,31 @@
 #!/usr/bin/env node
 // Controlled fixture website used by integration/E2E tests and demo mode.
-// Every behavior here is intentional and documented in fixtures/demo-site/README.md.
+// Every behavior and defect here is intentional and documented in fixtures/demo-site/README.md.
 // Usage: node fixtures/demo-site/server.mjs [port]   (default 4100, binds 127.0.0.1)
+import { randomBytes } from "node:crypto";
 import http from "node:http";
 import { fileURLToPath } from "node:url";
+import zlib from "node:zlib";
 
-const layout = (title, body, { extraHead = "" } = {}) => `<!doctype html>
+export const MEMBERS_USER = "qa";
+export const MEMBERS_PASSWORD = "demo-pass";
+
+const layout = (
+  title,
+  body,
+  { extraHead = "", description = `${title} – Demo Store` } = {},
+) => `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${title}</title>
+${description ? `<meta name="description" content="${description}">` : ""}
 ${extraHead}
 <link rel="stylesheet" href="/assets/site.css">
 </head>
 <body>
-<header><nav>
+<header><nav aria-label="Main">
   <a href="/">Home</a>
   <a href="/about">About</a>
   <a href="/products">Products</a>
@@ -35,6 +45,7 @@ const PAGES = {
       "Demo Store – Home",
       `<h1>Welcome to the Demo Store</h1>
 <p>Fixture homepage with known link behaviors.</p>
+<!-- deploy note: AKIAIOSFODNN7EXAMPLE (example credential left in a comment) -->
 <ul>
   <li><a href="/about?utm_source=newsletter">About (tracking parameter duplicate)</a></li>
   <li><a href="/old-page">Old page (301 to /about)</a></li>
@@ -42,12 +53,15 @@ const PAGES = {
   <li><a href="/private/secret">Private area (disallowed by robots.txt)</a></li>
   <li><a href="/missing">Missing page (404)</a></li>
   <li><a href="/server-error">Always failing page (500)</a></li>
+  <li><a href="/members">Members area (HTTP Basic authentication)</a></li>
+  <li><a href="/wide">Wide layout</a></li>
+  <li><a href="/slow">Slow page</a></li>
   <li><a href="/docs/guide.pdf">Guide (PDF resource, not a page)</a></li>
   <li><a href="https://example.org/partner">External partner site</a></li>
   <li><a href="mailto:hello@example.test">Email us</a></li>
   <li><a href="#top">Back to top</a></li>
 </ul>
-<img src="/images/hero.jpg" alt="Hero banner" width="1200" height="400">
+<img src="/images/hero.png" alt="Hero banner" width="1200" height="400">
 <div id="js-links"></div>
 <script>
   // This link only exists after JavaScript runs (tests JS-rendered link discovery).
@@ -57,19 +71,41 @@ const PAGES = {
   document.getElementById("js-links").appendChild(a);
   console.error("Fixture: intentional console error on the homepage");
 </script>`,
+      {
+        // Render-blocking script and invalid JSON-LD (missing closing brace) are intentional.
+        extraHead: `<script src="/assets/app.js"></script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Organization", "name": "Demo Store"</script>`,
+      },
     ),
-  "/about": () => layout("About us", `<h1>About us</h1><p>We sell demo products.</p>`),
+  "/about": () =>
+    layout(
+      "About us",
+      `<h1>About us</h1><p>We sell demo products.</p><img src="/images/team.png" width="40" height="40">`,
+      { description: null },
+    ),
   "/products": () =>
     layout(
       "Products",
-      `<h1>Products</h1><ul><li><a href="/products/widget">Widget</a></li><li><a href="/products/gadget">Gadget</a></li></ul>`,
+      `<h1>Products</h1>
+<p style="color:#c4c4c4;background:#ffffff">Prices include VAT (low-contrast text).</p>
+<ul><li><a href="/products/widget">Widget</a></li><li><a href="/products/gadget">Gadget</a></li></ul>`,
     ),
-  "/products/widget": () => layout("Widget", `<h1>Widget</h1><p>A very useful widget.</p>`),
-  "/products/gadget": () => layout("Gadget", `<h1>Gadget</h1><p>A shiny gadget.</p>`),
+  "/products/widget": () => layout("Product", `<h1>Widget</h1><p>A very useful widget.</p>`),
+  "/products/gadget": () =>
+    layout(
+      "Product",
+      `<h1>Gadget</h1><p>A shiny gadget.</p><img src="/images/missing.png" alt="Gadget photo" width="200" height="200">`,
+    ),
   "/contact": () =>
     layout(
       "Contact",
-      `<h1>Contact</h1><form action="/contact" method="post"><input type="email" name="email"><button>Send</button></form>`,
+      `<h1>Contact</h1>
+<form action="/contact" method="post"><input type="email" name="email"><button>Send</button></form>
+<button style="width:16px;height:16px;padding:0;font-size:8px;line-height:8px"><span aria-hidden="true">?</span></button>
+<div style="position:relative;height:48px">
+  <a href="/about" style="position:absolute;left:0;top:0;padding:12px;background:#eef">About the team</a>
+  <a href="/blog/" style="position:absolute;left:40px;top:6px;padding:12px;background:#fee">Read the blog</a>
+</div>`,
     ),
   "/blog/": () =>
     layout(
@@ -78,12 +114,28 @@ const PAGES = {
     ),
   "/blog/post-1": () =>
     layout("Post 1", `<h1>Post 1</h1><p>First post.</p><a href="/blog/archive">Archive</a>`),
-  "/blog/post-2": () => layout("Post 2", `<h1>Post 2</h1><p>Second post.</p>`),
+  "/blog/post-2": () =>
+    layout(
+      "Post 2",
+      `<h1>Post 2</h1><h4>Skipped heading levels</h4><h1>A second main heading</h1><p>Second post.</p>`,
+    ),
   "/blog/archive": () =>
     layout("Archive", `<h1>Archive</h1><a href="/blog/archive/2019">2019 posts</a>`),
   "/blog/archive/2019": () => layout("2019", `<h1>2019</h1><p>Depth 4 from the homepage.</p>`),
   "/js-only": () => layout("JS only", `<h1>Reached via a JavaScript-rendered link</h1>`),
   "/private/secret": () => layout("Secret", `<h1>Private</h1>`),
+  "/wide": () =>
+    layout(
+      "Wide layout",
+      `<h1>Wide layout</h1>
+<div style="width:1100px;background:#eee">This banner has a fixed width of 1100px.</div>
+<div style="width:120px;overflow:hidden;white-space:nowrap;border:1px solid #999">This sentence is far too long to fit inside its narrow box</div>`,
+    ),
+  "/slow": () =>
+    layout("Slow page", `<h1>Slow page</h1><p>The server waits 1.5 s before answering.</p>`),
+  "/members": () =>
+    layout("Members", `<h1>Members area</h1><a href="/members/profile">Your profile</a>`),
+  "/members/profile": () => layout("Profile", `<h1>Your profile</h1>`),
 };
 
 const REDIRECTS = {
@@ -93,13 +145,45 @@ const REDIRECTS = {
 };
 
 const CSS = "body{font-family:system-ui;margin:0}main{padding:1rem}";
-// ~300 KB of bytes served as an image so performance checks have something measurable.
-const HERO = Buffer.alloc(300 * 1024, 0x42);
+const APP_JS = "window.demoReady = true;";
+
+/** A real, decodable PNG of random pixels (incompressible, ~360 KB). */
+function makePng(width, height) {
+  const chunk = (type, data) => {
+    const len = Buffer.alloc(4);
+    len.writeUInt32BE(data.length);
+    const td = Buffer.concat([Buffer.from(type, "ascii"), data]);
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(zlib.crc32(td));
+    return Buffer.concat([len, td, crc]);
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8; // bit depth
+  ihdr[9] = 2; // RGB
+  const rows = [];
+  for (let y = 0; y < height; y++) rows.push(Buffer.from([0]), randomBytes(width * 3));
+  const idat = zlib.deflateSync(Buffer.concat(rows), { level: 0 });
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk("IHDR", ihdr),
+    chunk("IDAT", idat),
+    chunk("IEND", Buffer.alloc(0)),
+  ]);
+}
+
+const HERO = makePng(600, 200);
+const TEAM = makePng(40, 40);
+
+const BASIC = `Basic ${Buffer.from(`${MEMBERS_USER}:${MEMBERS_PASSWORD}`).toString("base64")}`;
 
 export function createDemoSiteServer() {
   return http.createServer((req, res) => {
     const url = new URL(req.url ?? "/", "http://fixture.local");
     const path = url.pathname;
+    // Version disclosure and cookie without security flags are intentional.
+    res.setHeader("Server", "DemoServer/1.2.3");
     if (path === "/robots.txt") {
       res.writeHead(200, { "content-type": "text/plain" });
       return res.end("User-agent: *\nDisallow: /private/\nSitemap: /sitemap.xml\n");
@@ -113,13 +197,30 @@ export function createDemoSiteServer() {
       res.writeHead(500, { "content-type": "text/html" });
       return res.end("<h1>Internal error</h1>");
     }
+    if (path.startsWith("/members")) {
+      if (req.headers.authorization !== BASIC) {
+        res.writeHead(401, {
+          "www-authenticate": 'Basic realm="Demo members"',
+          "content-type": "text/html",
+        });
+        return res.end("<h1>Login required</h1>");
+      }
+    }
     if (path === "/assets/site.css") {
       res.writeHead(200, { "content-type": "text/css" });
       return res.end(CSS);
     }
-    if (path === "/images/hero.jpg") {
-      res.writeHead(200, { "content-type": "image/jpeg", "content-length": HERO.length });
+    if (path === "/assets/app.js") {
+      res.writeHead(200, { "content-type": "text/javascript" });
+      return res.end(APP_JS);
+    }
+    if (path === "/images/hero.png") {
+      res.writeHead(200, { "content-type": "image/png", "content-length": HERO.length });
       return res.end(HERO);
+    }
+    if (path === "/images/team.png") {
+      res.writeHead(200, { "content-type": "image/png", "content-length": TEAM.length });
+      return res.end(TEAM);
     }
     if (path === "/docs/guide.pdf") {
       res.writeHead(200, { "content-type": "application/pdf" });
@@ -127,13 +228,21 @@ export function createDemoSiteServer() {
     }
     const page = PAGES[path];
     if (page) {
-      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      return res.end(page());
+      const send = () => {
+        const headers = { "content-type": "text/html; charset=utf-8" };
+        if (path === "/") headers["set-cookie"] = "demo_session=abc123; Path=/";
+        res.writeHead(200, headers);
+        res.end(page());
+      };
+      if (path === "/slow") return void setTimeout(send, 1500);
+      return send();
     }
     res.writeHead(404, { "content-type": "text/html; charset=utf-8" });
     res.end(layout("Not found", "<h1>404 – Page not found</h1>"));
   });
 }
+
+export const HERO_PNG_BYTES = HERO.length;
 
 /** Starts the fixture on 127.0.0.1. Port 0 picks a free port. */
 export function startDemoSite(port = 4100) {

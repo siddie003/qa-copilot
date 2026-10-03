@@ -90,13 +90,33 @@
 - E2E: Playwright starts web (3100), worker (health 3191) and fixture (4100) with
   `reuseExistingServer`, so stop stale servers after code changes.
 
+## Phase 5 decisions
+- Scanner contract in `packages/scanners/src/types.ts`; registry in `index.ts`; add a scanner by
+  adding a module, a registry entry and its key to `IMPLEMENTED_STEPS` (`packages/core/src/pipeline.ts`).
+- Worker builds one `ScannerContext` per scan from stored data (`scanner-steps.ts`) and runs each
+  selected scanner as its own step (timeout, failure isolation). Findings are re-validated with
+  `findingDraftSchema` before storage; invalid ones are dropped and reported as inconclusive.
+- Severity: axe impact critical/serious/moderate/minor → critical/high/medium/low (best-practice
+  rules one level lower). Performance thresholds are Google's published LCP/CLS/TBT/TTFB/FCP values.
+- Link verdicts: 404/410/other 4xx/5xx(non-502-504)/ENOTFOUND/redirect loop = broken;
+  timeouts, 502/503/504 after retries, EAI_AGAIN = temporarily unavailable (potential);
+  401/403/407/429, private targets, robots-disallowed = inconclusive check (not a finding).
+- `analyzablePages()` de-duplicates redirecting URLs by normalized final URL; capture does the same.
+- Fingerprint = sha256(scanner, rule, site-relative URL, fingerprintKey|selector, viewport class).
+- In-page scripts are strings (`page-scripts.ts`, scanner scripts) because tsx/esbuild injects
+  `__name`; `npm run check:tsx-capture` guards this.
+- Integration tests use an offline resolver (only localhost resolves) so results never depend on
+  the internet.
+- Edit scripts: when a shell heredoc fails on quoting, write the script to a file in the repo,
+  run it, delete it; always assert anchors exist (silent `str.replace` misses caused one bug).
+
 ## Environment facts
 - PostgreSQL 18 binaries: `C:\Program Files\PostgreSQL\18\bin` (not on PATH). Service `postgresql-x64-18`.
 - No Docker, no Redis, no pnpm. Windows 11, Node 22.16.
 - Project folder: `C:\Users\Siddharth\Downloads\qa-copilot`.
 
 ## Unfinished tasks
-- None inside Phase 4. Next: Phase 5 (after approval).
+- None inside Phase 5. Next: Phase 6 (after approval).
 
 ## Known bugs
 - None known.

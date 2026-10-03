@@ -192,6 +192,9 @@ describe("crawling the fixture site (real HTTP)", () => {
         "/blog/post-1",
         "/blog/post-2",
         "/blog/archive",
+        "/members",
+        "/wide",
+        "/slow",
       ].sort(),
     );
     // Depth 4 page, external link, PDF and tracking-parameter duplicate are not visited.
@@ -209,7 +212,7 @@ describe("crawling the fixture site (real HTTP)", () => {
     expect(byPath.get("/blog/archive")!.depth).toBe(3);
 
     expect(summary).toMatchObject({ blockedByRobots: 1, limitReached: false, cancelled: false });
-    expect(summary.failed).toBe(2); // /missing (404) and /server-error (500)
+    expect(summary.failed).toBe(3); // /missing (404), /server-error (500), /members (401)
   });
 
   it("stops at the page limit", async () => {

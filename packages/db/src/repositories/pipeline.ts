@@ -1,6 +1,16 @@
 import { and, asc, count, desc, eq, inArray, isNull, lt, sql } from "drizzle-orm";
 import type { Database } from "../client";
-import { networkRequest, page, pageCapture, project, scan, scannerRun } from "../schema";
+import { createHash } from "node:crypto";
+import {
+  evidence,
+  networkRequest,
+  page,
+  pageCapture,
+  project,
+  rawFinding,
+  scan,
+  scannerRun,
+} from "../schema";
 import { ownedProjects } from "./owned";
 
 export const SCAN_EVENTS_CHANNEL = "scan_events";
@@ -144,6 +154,7 @@ export async function updateStep(
     findingCount?: number;
     toolName?: string | null;
     toolVersion?: string | null;
+    checks?: Record<string, unknown> | null;
     started?: boolean;
     finished?: boolean;
   },
@@ -157,6 +168,7 @@ export async function updateStep(
       ...(patch.findingCount !== undefined ? { findingCount: patch.findingCount } : {}),
       ...(patch.toolName !== undefined ? { toolName: patch.toolName } : {}),
       ...(patch.toolVersion !== undefined ? { toolVersion: patch.toolVersion } : {}),
+      ...(patch.checks !== undefined ? { checks: patch.checks } : {}),
       ...(patch.started ? { startedAt: sql`now()` } : {}),
       ...(patch.finished
         ? {
@@ -266,7 +278,12 @@ export async function setPageRawHtmlKey(db: Database, pageId: string, key: strin
 /** Pages to capture with the browser: same-site HTML pages that returned < 400. */
 export async function listCapturablePages(db: Database, scanId: string) {
   return db
-    .select({ id: page.id, url: page.url, finalUrl: page.finalUrl })
+    .select({
+      id: page.id,
+      url: page.url,
+      finalUrl: page.finalUrl,
+      redirectChain: page.redirectChain,
+    })
     .from(page)
     .where(
       and(
@@ -290,6 +307,7 @@ export async function insertCapture(
     domSnapshotKey: string | null;
     consoleMessages: Array<Record<string, unknown>>;
     timings: Record<string, unknown>;
+    metrics: Record<string, unknown> | null;
     error: string | null;
     requests: Array<{
       url: string;
@@ -399,4 +417,196 @@ export async function latestScanIdForProject(db: Database, projectId: string) {
     .orderBy(desc(scan.createdAt))
     .limit(1);
   return row?.id ?? null;
+}
+
+export interface NewFinding {
+  ruleId: string;
+  title: string;
+  message: string;
+  category: string;
+  subcategory: string | null;
+  pageId: string | null;
+  /** Site-relative identity of the page/URL the finding belongs to (for fingerprints). */
+  locationKey: string;
+  selector: string | null;
+  viewport: string | null;
+  severity: "critical" | "high" | "medium" | "low" | "info";
+  verdict: "confirmed" | "potential" | "inconclusive" | "unable_to_verify";
+  confidence: number;
+  expected: string | null;
+  actual: string | null;
+  fingerprintKey: string | null;
+  evidence: Array<{ kind: string; data: Record<string, unknown>; storageKey?: string | null }>;
+}
+
+/**
+ * Stable identity of a finding across scans: scanner, rule, location and element. Used later to
+ * classify issues as new / persistent / resolved / reopened.
+ */
+export function findingFingerprint(
+  scanner: string,
+  f: Pick<NewFinding, "ruleId" | "locationKey" | "selector" | "viewport" | "fingerprintKey">,
+) {
+  const viewportClass = f.viewport ? (/mobile|phone/i.test(f.viewport) ? "touch" : f.viewport) : "";
+  return createHash("sha256")
+    .update(
+      [scanner, f.ruleId, f.locationKey, f.fingerprintKey ?? f.selector ?? "", viewportClass].join(
+        "\n",
+      ),
+    )
+    .digest("hex");
+}
+
+/** Inserts a scanner's findings and their evidence in one transaction; returns display ids. */
+export async function insertFindings(
+  db: Database,
+  scanId: string,
+  scanner: string,
+  idPrefix: string,
+  findings: NewFinding[],
+) {
+  if (!findings.length) return [];
+  return db.transaction(async (tx) => {
+    const [run] = await tx
+      .select({ id: scannerRun.id })
+      .from(scannerRun)
+      .where(and(eq(scannerRun.scanId, scanId), eq(scannerRun.stepKey, scanner)));
+    if (!run) throw new Error(`No pipeline step ${scanner} for scan ${scanId}`);
+    const rows = await tx
+      .insert(rawFinding)
+      .values(
+        findings.map((f, i) => ({
+          scanId,
+          scannerRunId: run.id,
+          pageId: f.pageId,
+          displayId: `${idPrefix}-${String(i + 1).padStart(3, "0")}`,
+          scanner,
+          ruleId: f.ruleId,
+          category: f.category,
+          subcategory: f.subcategory,
+          title: f.title.slice(0, 300),
+          message: f.message,
+          proposedSeverity: f.severity,
+          verdict: f.verdict,
+          selector: f.selector,
+          viewport: f.viewport,
+          confidence: f.confidence,
+          expected: f.expected,
+          actual: f.actual,
+          fingerprint: findingFingerprint(scanner, f),
+        })),
+      )
+      .returning({ id: rawFinding.id, displayId: rawFinding.displayId });
+    const evidenceRows = rows.flatMap((r, i) =>
+      findings[i]!.evidence.map((e) => ({
+        rawFindingId: r.id,
+        kind: e.kind,
+        data: e.data,
+        storageKey: e.storageKey ?? null,
+      })),
+    );
+    for (let i = 0; i < evidenceRows.length; i += 500)
+      await tx.insert(evidence).values(evidenceRows.slice(i, i + 500));
+    return rows.map((r) => r.displayId);
+  });
+}
+
+/** Everything scanners need about a scan's pages: headers, artifact keys, captures, requests. */
+export async function loadScanData(db: Database, scanId: string) {
+  const pages = await db
+    .select()
+    .from(page)
+    .where(eq(page.scanId, scanId))
+    .orderBy(asc(page.depth), asc(page.createdAt));
+  const captures = pages.length
+    ? await db
+        .select()
+        .from(pageCapture)
+        .where(
+          inArray(
+            pageCapture.pageId,
+            pages.map((p) => p.id),
+          ),
+        )
+    : [];
+  const requests = captures.length
+    ? await db
+        .select()
+        .from(networkRequest)
+        .where(
+          inArray(
+            networkRequest.pageCaptureId,
+            captures.map((c) => c.id),
+          ),
+        )
+    : [];
+  return { pages, captures, requests };
+}
+
+const SEVERITY_VALUES = ["critical", "high", "medium", "low", "info"] as const;
+type SeverityValue = (typeof SEVERITY_VALUES)[number];
+
+/** Raw findings of a scan (owner-checked) with their evidence, for the findings view and API. */
+export async function listFindingsForScan(
+  db: Database,
+  ownerId: string,
+  scanId: string,
+  filter: { scanner?: string; severity?: string[] } = {},
+) {
+  if (!(await canReadScanArtifacts(db, ownerId, scanId))) return null;
+  const conditions = [eq(rawFinding.scanId, scanId)];
+  if (filter.scanner) conditions.push(eq(rawFinding.scanner, filter.scanner));
+  const severities = (filter.severity ?? []).filter((s): s is SeverityValue =>
+    (SEVERITY_VALUES as readonly string[]).includes(s),
+  );
+  if (severities.length) conditions.push(inArray(rawFinding.proposedSeverity, severities));
+  const rows = await db
+    .select({
+      id: rawFinding.id,
+      displayId: rawFinding.displayId,
+      scanner: rawFinding.scanner,
+      ruleId: rawFinding.ruleId,
+      category: rawFinding.category,
+      subcategory: rawFinding.subcategory,
+      title: rawFinding.title,
+      message: rawFinding.message,
+      severity: rawFinding.proposedSeverity,
+      verdict: rawFinding.verdict,
+      selector: rawFinding.selector,
+      viewport: rawFinding.viewport,
+      confidence: rawFinding.confidence,
+      expected: rawFinding.expected,
+      actual: rawFinding.actual,
+      pageUrl: page.url,
+    })
+    .from(rawFinding)
+    .leftJoin(page, eq(page.id, rawFinding.pageId))
+    .where(and(...conditions))
+    .orderBy(asc(rawFinding.proposedSeverity), asc(rawFinding.scanner), asc(rawFinding.displayId));
+  const ev = rows.length
+    ? await db
+        .select()
+        .from(evidence)
+        .where(
+          inArray(
+            evidence.rawFindingId,
+            rows.map((r) => r.id),
+          ),
+        )
+    : [];
+  return rows.map((r) => ({
+    ...r,
+    evidence: ev
+      .filter((e) => e.rawFindingId === r.id)
+      .map((e) => ({ kind: e.kind, data: e.data, storageKey: e.storageKey })),
+  }));
+}
+
+/** Finding counts per scanner and severity for a scan. */
+export async function findingCounts(db: Database, scanId: string) {
+  return db
+    .select({ scanner: rawFinding.scanner, severity: rawFinding.proposedSeverity, n: count() })
+    .from(rawFinding)
+    .where(eq(rawFinding.scanId, scanId))
+    .groupBy(rawFinding.scanner, rawFinding.proposedSeverity);
 }

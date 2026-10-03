@@ -5,7 +5,17 @@ import { SCANNER_KEYS, type ScanDefaults } from "./domain";
  * progress. Steps whose implementation does not exist yet are created as "skipped" with an
  * explicit reason instead of pretending to run.
  */
-export const IMPLEMENTED_STEPS = new Set<string>(["preflight", "crawl", "capture"]);
+export const IMPLEMENTED_STEPS = new Set<string>([
+  "preflight",
+  "crawl",
+  "capture",
+  "accessibility",
+  "security",
+  "seo",
+  "links",
+  "performance",
+  "responsive",
+]);
 
 const NOT_IMPLEMENTED_REASON: Record<string, string> = {
   scanner: "Scanner module not implemented yet (planned for Phase 5)",
