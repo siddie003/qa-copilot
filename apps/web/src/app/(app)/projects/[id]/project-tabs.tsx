@@ -4,10 +4,14 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/cn";
 
-// Further project sections (Scan, Issues, Pages, Scanner Results, Reports, Scan History)
-// are added as their phases are implemented, so no tab leads to a placeholder.
 const TABS = [
   { segment: "", label: "Overview" },
+  { segment: "/scan", label: "Scan" },
+  { segment: "/issues", label: "Issues" },
+  { segment: "/pages", label: "Pages" },
+  { segment: "/scanners", label: "Scanner results" },
+  { segment: "/reports", label: "Reports" },
+  { segment: "/history", label: "Scan history" },
   { segment: "/settings", label: "Settings" },
 ];
 
@@ -19,7 +23,8 @@ export function ProjectTabs({ projectId }: { projectId: string }) {
       <ul className="-mb-px flex gap-1 overflow-x-auto">
         {TABS.map((t) => {
           const href = base + t.segment;
-          const active = pathname === href;
+          // Segment-exact match ("/scan" must not match "/scanners").
+          const active = pathname === href || (t.segment !== "" && pathname.startsWith(`${href}/`));
           return (
             <li key={t.label}>
               <Link

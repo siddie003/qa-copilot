@@ -4,6 +4,7 @@ import { connection } from "next/server";
 import { PageHeader } from "@/components/ui/page-header";
 import { StatusPill, type PillTone } from "@/components/ui/status-pill";
 import { runReadinessChecks } from "@/server/readiness";
+import { requirePageUser } from "@/server/session";
 
 export const metadata: Metadata = { title: "Settings" };
 
@@ -36,6 +37,7 @@ function Card({ title, children }: { title: string; children: React.ReactNode })
 
 export default async function SettingsPage() {
   await connection(); // Always render at request time: these are live checks.
+  const user = await requirePageUser();
   const report = await runReadinessChecks({ includeDetails: true });
   const { config, database, storage } = report.checks;
 
@@ -50,9 +52,13 @@ export default async function SettingsPage() {
     <>
       <PageHeader
         title="Settings"
-        description="System status and configuration. Secrets are never displayed."
+        description="Account, system status and configuration. Secrets are never displayed."
       />
       <div className="grid gap-6 xl:grid-cols-2">
+        <Card title="Account">
+          <Row label="Name">{user.name}</Row>
+          <Row label="Email">{user.email}</Row>
+        </Card>
         <Card title="System status">
           <Row label="Overall">
             <StatusPill tone={report.status === "ready" ? "success" : "danger"}>

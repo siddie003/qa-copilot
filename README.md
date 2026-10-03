@@ -4,7 +4,7 @@ AI-powered website QA, design and brand compliance platform. You provide a desig
 (Figma or brand guidelines), approved content and a website URL; QA Copilot crawls the site,
 runs evidence-based QA scanners, and turns the findings into developer-ready issues and reports.
 
-> **Status:** Phase 2 (database, authentication, project management). See [PROJECT_STATUS.md](PROJECT_STATUS.md) and
+> **Status:** Phase 3 (dashboard and UI). Scanning starts in Phase 4. See [PROJECT_STATUS.md](PROJECT_STATUS.md) and
 > [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). A full README (Docker, deployment, scanners, AI
 > configuration) is completed in Phase 10.
 
@@ -56,7 +56,7 @@ npm run start:worker
 
 The **Settings** page shows the same live checks in the UI.
 
-## API (Phase 2)
+## API
 
 All `/api/v1` endpoints except health checks require a session cookie (sign in via the UI or
 `POST /api/auth/sign-in/email`). Errors use `application/problem+json`.
@@ -68,6 +68,12 @@ All `/api/v1` endpoints except health checks require a session cookie (sign in v
 | GET | `/api/v1/projects/:id` | Project with last scan and issue counts |
 | PATCH | `/api/v1/projects/:id` | Update name, website URL, scan defaults |
 | DELETE | `/api/v1/projects/:id` | Soft delete |
+| POST | `/api/v1/projects/validate-url` | Check and normalize a website URL `{ websiteUrl }` |
+| GET | `/api/v1/projects/:id/references` | Design references of a project |
+| POST | `/api/v1/projects/:id/references` | Add a Figma link `{ figmaUrl }` (stored as pending) |
+| GET | `/api/v1/dashboard/summary` | Dashboard figures computed from stored records |
+
+`POST /api/v1/projects` also accepts an optional `figmaUrl`, saved in the same transaction.
 
 Website URLs are validated before they are stored: only http/https, no embedded credentials,
 no private/loopback/link-local/metadata addresses or local host names, except hosts listed in
@@ -87,6 +93,16 @@ npm run test:integration # needs TEST_DATABASE_URL (database name must end in _t
 Integration tests run against `TEST_DATABASE_URL` (created by `db:bootstrap`), apply migrations
 automatically and truncate tables between tests. They refuse to run against a database whose
 name does not end in `_test`.
+
+End-to-end accessibility tests (Playwright + axe-core, WCAG 2.2 A/AA, desktop and 390px mobile).
+They start a production server on port 3100 (run `npm run build` first; your dev server on 3000
+is not touched) and remove their throwaway account afterwards:
+
+```bash
+npx playwright install chromium   # once
+npm run build
+npm run test:e2e
+```
 
 HTTP smoke test against a running server (creates and later deletes throwaway accounts):
 

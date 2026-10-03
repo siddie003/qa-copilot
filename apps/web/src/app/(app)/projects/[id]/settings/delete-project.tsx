@@ -1,10 +1,10 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useRef, useState } from "react";
-import { Alert } from "@/components/ui/alert";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { inputClasses } from "@/components/ui/field";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { useToast } from "@/components/ui/toast";
 import { ApiError, apiFetch } from "@/lib/api-client";
 
 export function DeleteProject({
@@ -15,22 +15,17 @@ export function DeleteProject({
   projectName: string;
 }) {
   const router = useRouter();
-  const dialogRef = useRef<HTMLDialogElement>(null);
-  const [confirmText, setConfirmText] = useState("");
+  const toast = useToast();
+  const [open, setOpen] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  function close() {
-    dialogRef.current?.close();
-    setConfirmText("");
-    setError(null);
-  }
 
   async function onDelete() {
     setPending(true);
     setError(null);
     try {
       await apiFetch(`/api/v1/projects/${projectId}`, { method: "DELETE" });
+      toast.success(`Project “${projectName}” deleted.`);
       router.push("/projects");
       router.refresh();
     } catch (err) {
@@ -51,48 +46,23 @@ export function DeleteProject({
         Removes the project and its scan history from all views. This cannot be undone from the
         application.
       </p>
-      <Button variant="danger" className="mt-4" onClick={() => dialogRef.current?.showModal()}>
+      <Button variant="danger" className="mt-4" onClick={() => setOpen(true)}>
         Delete project…
       </Button>
-
-      <dialog
-        ref={dialogRef}
-        aria-labelledby="delete-dialog-title"
-        onClose={() => setConfirmText("")}
-        className="m-auto w-[min(28rem,calc(100vw-2rem))] rounded-lg border border-border bg-surface p-6 text-foreground shadow-xl backdrop:bg-black/50"
-      >
-        <h3 id="delete-dialog-title" className="text-lg font-semibold">
-          Delete “{projectName}”?
-        </h3>
-        <p className="mt-2 text-sm text-muted">Type the project name to confirm.</p>
-        <label htmlFor="delete-confirm" className="sr-only">
-          Project name
-        </label>
-        <input
-          id="delete-confirm"
-          value={confirmText}
-          onChange={(e) => setConfirmText(e.target.value)}
-          autoComplete="off"
-          className={`${inputClasses} mt-3`}
-        />
-        {error && (
-          <Alert tone="error" className="mt-3">
-            {error}
-          </Alert>
-        )}
-        <div className="mt-5 flex justify-end gap-2">
-          <Button variant="secondary" onClick={close} disabled={pending}>
-            Cancel
-          </Button>
-          <Button
-            variant="danger"
-            onClick={onDelete}
-            disabled={pending || confirmText !== projectName}
-          >
-            {pending ? "Deleting…" : "Delete project"}
-          </Button>
-        </div>
-      </dialog>
+      <ConfirmDialog
+        open={open}
+        title={`Delete “${projectName}”?`}
+        description="The project, its references and its scan history will no longer be accessible."
+        confirmLabel={pending ? "Deleting…" : "Delete project"}
+        confirmText={projectName}
+        pending={pending}
+        error={error}
+        onConfirm={onDelete}
+        onClose={() => {
+          setOpen(false);
+          setError(null);
+        }}
+      />
     </section>
   );
 }

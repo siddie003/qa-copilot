@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+### Phase 3: Dashboard and UI (2026-10-03)
+#### Added
+- Dashboard backed by stored data: project and issue totals, outstanding issues by severity,
+  scanner status of the latest scan, recent scans; empty states when nothing exists.
+- Project sections: Overview, Scan (readiness checklist, configuration, disabled Start QA Scan),
+  Issues, Pages, Scanner results, Reports, Scan history, Settings.
+- Global Scans, Issues (search, severity/status/category filters, sorting, pagination) and Reports pages.
+- Six-step project setup wizard (project, Figma/brand, content, scan configuration, review, start).
+- Figma link parsing and storage as a pending design reference; URL check endpoint; dashboard API.
+- UI components: toasts, breadcrumbs, pagination, severity/status badges, tooltips,
+  confirmation dialog, stat tiles, cards. Account section in Settings.
+- Read-model repositories (dashboard, scans, issues, pages, reports, references) with ownership checks.
+- Playwright + axe-core end-to-end accessibility suite.
+#### Fixed
+- Horizontal overflow caused by hidden tooltips; scrollable tables and the wizard step list are
+  now keyboard-focusable regions (found by the new accessibility suite).
+- `updated_at` now uses the database clock (flaky timestamp comparison).
+
 ### Phase 2: Database + project management (2026-10-03)
 #### Added
 - Full PostgreSQL schema (24 tables) for users, projects, references, content, scans, scanner

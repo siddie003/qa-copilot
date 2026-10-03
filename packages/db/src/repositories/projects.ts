@@ -1,7 +1,8 @@
 import type { ScanDefaults } from "@qa/core";
 import { and, count, desc, eq, ilike, inArray, isNull, or, sql } from "drizzle-orm";
 import type { Database } from "../client";
-import { issueTrack, project, scan } from "../schema";
+import { issueTrack, project, referenceSource, scan } from "../schema";
+import type { FigmaReferenceValues } from "./references";
 
 export interface IssueCounts {
   total: number;
@@ -63,47 +64,32 @@ export function escapeLike(value: string): string {
 }
 
 const active = sql`${issueTrack.status} in ('open','in_progress','reopened')`;
+const countWhere = (cond: ReturnType<typeof sql>) =>
+  sql<number>`count(*) filter (where ${cond})`.mapWith(Number);
+const status = (s: string) => sql`${issueTrack.status} = ${s}`;
+const activeSeverity = (s: string) => sql`${active} and ${issueTrack.severity} = ${s}`;
+
+/** Aggregate columns over `issue_track` rows; reused by project summaries and the dashboard. */
+export const issueCountColumns = {
+  total: count(),
+  open: countWhere(status("open")),
+  inProgress: countWhere(status("in_progress")),
+  resolved: countWhere(status("resolved")),
+  reopened: countWhere(status("reopened")),
+  ignored: countWhere(status("ignored")),
+  inconclusive: countWhere(status("inconclusive")),
+  critical: countWhere(activeSeverity("critical")),
+  high: countWhere(activeSeverity("high")),
+  medium: countWhere(activeSeverity("medium")),
+  low: countWhere(activeSeverity("low")),
+  info: countWhere(activeSeverity("info")),
+};
 
 async function loadIssueCounts(db: Database, projectIds: string[]) {
   const result = new Map<string, IssueCounts>();
   if (projectIds.length === 0) return result;
   const rows = await db
-    .select({
-      projectId: issueTrack.projectId,
-      total: count(),
-      open: sql<number>`count(*) filter (where ${issueTrack.status} = 'open')`.mapWith(Number),
-      inProgress: sql<number>`count(*) filter (where ${issueTrack.status} = 'in_progress')`.mapWith(
-        Number,
-      ),
-      resolved: sql<number>`count(*) filter (where ${issueTrack.status} = 'resolved')`.mapWith(
-        Number,
-      ),
-      reopened: sql<number>`count(*) filter (where ${issueTrack.status} = 'reopened')`.mapWith(
-        Number,
-      ),
-      ignored: sql<number>`count(*) filter (where ${issueTrack.status} = 'ignored')`.mapWith(
-        Number,
-      ),
-      inconclusive:
-        sql<number>`count(*) filter (where ${issueTrack.status} = 'inconclusive')`.mapWith(Number),
-      critical:
-        sql<number>`count(*) filter (where ${active} and ${issueTrack.severity} = 'critical')`.mapWith(
-          Number,
-        ),
-      high: sql<number>`count(*) filter (where ${active} and ${issueTrack.severity} = 'high')`.mapWith(
-        Number,
-      ),
-      medium:
-        sql<number>`count(*) filter (where ${active} and ${issueTrack.severity} = 'medium')`.mapWith(
-          Number,
-        ),
-      low: sql<number>`count(*) filter (where ${active} and ${issueTrack.severity} = 'low')`.mapWith(
-        Number,
-      ),
-      info: sql<number>`count(*) filter (where ${active} and ${issueTrack.severity} = 'info')`.mapWith(
-        Number,
-      ),
-    })
+    .select({ projectId: issueTrack.projectId, ...issueCountColumns })
     .from(issueTrack)
     .where(inArray(issueTrack.projectId, projectIds))
     .groupBy(issueTrack.projectId);
@@ -192,12 +178,25 @@ export interface CreateProjectValues {
   isDemo?: boolean;
 }
 
-export async function createProject(db: Database, ownerId: string, values: CreateProjectValues) {
-  const [row] = await db
-    .insert(project)
-    .values({ ownerId, ...values })
-    .returning();
-  const [summary] = await summarize(db, [row!]);
+/** Creates a project and, optionally, its Figma reference in one transaction. */
+export async function createProject(
+  db: Database,
+  ownerId: string,
+  values: CreateProjectValues & { figma?: FigmaReferenceValues },
+) {
+  const { figma, ...projectValues } = values;
+  const row = await db.transaction(async (tx) => {
+    const [created] = await tx
+      .insert(project)
+      .values({ ownerId, ...projectValues })
+      .returning();
+    if (figma)
+      await tx
+        .insert(referenceSource)
+        .values({ projectId: created!.id, kind: "figma", status: "pending", ...figma });
+    return created!;
+  });
+  const [summary] = await summarize(db, [row]);
   return summary!;
 }
 

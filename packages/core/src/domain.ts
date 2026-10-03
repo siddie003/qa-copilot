@@ -20,6 +20,21 @@ export const SCANNER_LABELS: Record<ScannerKey, string> = {
   responsive: "Responsive / visual",
 };
 
+/** Labels for every pipeline step stored in scanner_run.step_key (unknown keys fall back to the key). */
+export const PIPELINE_STEP_LABELS: Record<string, string> = {
+  preflight: "Preparing website",
+  crawl: "Crawling pages",
+  capture: "Browser capture",
+  ...SCANNER_LABELS,
+  design: "Design comparison",
+  content: "Content comparison",
+  ai: "AI analysis",
+  grounding: "Evidence validation",
+  report: "Report generation",
+};
+
+export const stepLabel = (key: string) => PIPELINE_STEP_LABELS[key] ?? key;
+
 export const SEVERITIES = ["critical", "high", "medium", "low", "info"] as const;
 export type Severity = (typeof SEVERITIES)[number];
 
@@ -96,7 +111,15 @@ export const projectCreateSchema = z.object({
   name: projectName,
   websiteUrl: websiteUrlInput,
   scanDefaults: scanDefaultsSchema.optional(),
+  /** Optional Figma design link captured in the setup wizard (processed in a later step). */
+  figmaUrl: z.string().trim().max(2048).optional(),
 });
+
+export const figmaReferenceSchema = z.object({
+  figmaUrl: z.string().trim().min(1, "Figma link is required").max(2048),
+});
+
+export const websiteUrlCheckSchema = z.object({ websiteUrl: websiteUrlInput });
 export type ProjectCreateInput = z.infer<typeof projectCreateSchema>;
 
 export const projectUpdateSchema = z

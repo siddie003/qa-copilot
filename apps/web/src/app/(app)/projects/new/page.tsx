@@ -1,26 +1,27 @@
+import { defaultScanDefaults, getConfig, SCANNER_KEYS, SCANNER_LABELS } from "@qa/core";
 import type { Metadata } from "next";
-import Link from "next/link";
+import { Breadcrumbs } from "@/components/ui/breadcrumbs";
 import { PageHeader } from "@/components/ui/page-header";
-import { NewProjectForm } from "./new-project-form";
+import { ProjectWizard } from "./project-wizard";
 
 export const metadata: Metadata = { title: "New project" };
 
 export default function NewProjectPage() {
+  const cfg = getConfig();
   return (
     <>
-      <nav aria-label="Breadcrumb" className="mb-2 text-sm text-muted">
-        <Link href="/projects" className="hover:underline">
-          Projects
-        </Link>{" "}
-        / New project
-      </nav>
+      <Breadcrumbs items={[{ label: "Projects", href: "/projects" }, { label: "New project" }]} />
       <PageHeader
         title="New project"
-        description="Start with the website to QA. Figma or brand references, approved content and scan options are added in the project afterwards."
+        description="Set up the website, design reference, approved content and scan configuration."
       />
-      <div className="max-w-xl rounded-lg border border-border bg-surface p-6">
-        <NewProjectForm />
-      </div>
+      <ProjectWizard
+        defaults={defaultScanDefaults({
+          maxPages: cfg.SCAN_MAX_PAGES,
+          maxDepth: cfg.SCAN_MAX_DEPTH,
+        })}
+        scanners={SCANNER_KEYS.map((key) => ({ key, label: SCANNER_LABELS[key] }))}
+      />
     </>
   );
 }

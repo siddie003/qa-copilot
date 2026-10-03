@@ -1,6 +1,7 @@
 import "server-only";
 import {
   defaultScanDefaults,
+  parseFigmaUrl,
   getConfig,
   notFound,
   validationError,
@@ -8,7 +9,7 @@ import {
   type ProjectCreateInput,
   type ProjectUpdateInput,
 } from "@qa/core";
-import { getDb, projectsRepo, type ProjectSummary } from "@qa/db";
+import { getDb, projectsRepo, referencesRepo, type ProjectSummary } from "@qa/db";
 import { validateWebsiteUrl } from "@qa/security";
 import { z } from "zod";
 
@@ -24,6 +25,14 @@ export function normalizeWebsiteUrl(raw: string): string {
       { path: "websiteUrl", message: result.message, code: result.code },
     ]);
   return result.url;
+}
+
+/** Validates a Figma link and extracts identifiers (no request to Figma is made here). */
+export function parseFigmaReference(raw: string) {
+  const parsed = parseFigmaUrl(raw);
+  if (!parsed.ok)
+    throw validationError(parsed.message, [{ path: "figmaUrl", message: parsed.message }]);
+  return { figmaUrl: parsed.url, figmaFileKey: parsed.fileKey, figmaNodeIds: parsed.nodeIds };
 }
 
 function assertProjectId(id: string) {
@@ -67,6 +76,7 @@ export async function createProject(userId: string, input: ProjectCreateInput) {
     scanDefaults:
       input.scanDefaults ??
       defaultScanDefaults({ maxPages: cfg.SCAN_MAX_PAGES, maxDepth: cfg.SCAN_MAX_DEPTH }),
+    ...(input.figmaUrl ? { figma: parseFigmaReference(input.figmaUrl) } : {}),
   });
 }
 
@@ -88,4 +98,14 @@ export async function deleteProject(userId: string, id: string) {
   assertProjectId(id);
   const deleted = await projectsRepo.softDeleteProject(getDb(), userId, id);
   if (!deleted) throw notFound("Project");
+}
+
+export async function listReferences(userId: string, projectId: string) {
+  await getProject(userId, projectId); // ownership check (404 otherwise)
+  return referencesRepo.listReferenceSources(getDb(), projectId);
+}
+
+export async function addFigmaReference(userId: string, projectId: string, figmaUrl: string) {
+  await getProject(userId, projectId);
+  return referencesRepo.addFigmaReference(getDb(), projectId, parseFigmaReference(figmaUrl));
 }

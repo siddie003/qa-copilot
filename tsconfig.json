@@ -1,4 +1,7 @@
 {
   "extends": "./tsconfig.base.json",
-  "include": ["tests", "vitest.config.ts"]
+  "compilerOptions": {
+    "lib": ["ES2023", "DOM"]
+  },
+  "include": ["tests", "vitest.config.ts", "playwright.config.ts"]
 }

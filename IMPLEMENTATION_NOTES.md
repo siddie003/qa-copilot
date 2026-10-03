@@ -51,13 +51,28 @@
   the global setup migrates it and refuses database names not ending in `_test`; tests truncate
   `"user"` (cascades to everything). Files run sequentially.
 
+## Phase 3 decisions
+- Read models live in `packages/db/src/repositories/*` and always join `project` with
+  `ownedProjects(ownerId)` (owner, not deleted, real vs demo workspace).
+- Server components query repositories directly; client components call `/api/v1` via `apiFetch`.
+- `@qa/core/domain` and `@qa/core/figma` are browser-safe subpath exports (the main entry pulls in
+  pino/dotenv/fs and must not be imported by client components).
+- Figma links are parsed (file key, node ids) and stored as `reference_source` with status
+  `pending`; nothing is fetched or invented until Phase 6.
+- "Start QA Scan" is rendered disabled with an explanation until Phase 4 (no simulated scans).
+- Tooltips use display:none when hidden; visibility:hidden still widens the page.
+- Horizontally scrollable containers get `role="region"`, `aria-label`, `tabIndex={0}` (axe
+  scrollable-region-focusable).
+- Playwright e2e runs a production server on port 3100 (`reuseExistingServer`; stop stale servers
+  after rebuilding). Throwaway e2e accounts use `@example.test` and are deleted in `afterAll`.
+
 ## Environment facts
 - PostgreSQL 18 binaries: `C:\Program Files\PostgreSQL\18\bin` (not on PATH). Service `postgresql-x64-18`.
 - No Docker, no Redis, no pnpm. Windows 11, Node 22.16.
 - Project folder: `C:\Users\Siddharth\Downloads\qa-copilot`.
 
 ## Unfinished tasks
-- None inside Phase 2. Next: Phase 3 (after approval).
+- None inside Phase 3. Next: Phase 4 (after approval).
 
 ## Known bugs
 - None known.

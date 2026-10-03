@@ -6,6 +6,7 @@ import { useState } from "react";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Field, inputClasses } from "@/components/ui/field";
+import { useToast } from "@/components/ui/toast";
 import { ApiError, apiFetch } from "@/lib/api-client";
 
 interface Viewport {
@@ -32,6 +33,7 @@ interface Props {
 
 export function ProjectSettingsForm({ project, scanners }: Props) {
   const router = useRouter();
+  const toast = useToast();
   const [viewports, setViewports] = useState<Viewport[]>(project.scanDefaults.viewports);
   const [pending, setPending] = useState(false);
   const [status, setStatus] = useState<{ tone: "error" | "success"; text: string } | null>(null);
@@ -62,6 +64,7 @@ export function ProjectSettingsForm({ project, scanners }: Props) {
         },
       });
       setStatus({ tone: "success", text: "Settings saved." });
+      toast.success("Project settings saved.");
       router.refresh();
     } catch (err) {
       if (err instanceof ApiError) {

@@ -1,5 +1,5 @@
 import { ExternalLink } from "lucide-react";
-import Link from "next/link";
+import { Breadcrumbs } from "@/components/ui/breadcrumbs";
 import { loadProjectForPage } from "@/server/loaders";
 import { ProjectTabs } from "./project-tabs";
 
@@ -14,12 +14,7 @@ export default async function ProjectLayout({
   const { project } = await loadProjectForPage(id);
   return (
     <>
-      <nav aria-label="Breadcrumb" className="mb-2 text-sm text-muted">
-        <Link href="/projects" className="hover:underline">
-          Projects
-        </Link>{" "}
-        / <span className="text-foreground">{project.name}</span>
-      </nav>
+      <Breadcrumbs items={[{ label: "Projects", href: "/projects" }, { label: project.name }]} />
       <div className="mb-4">
         <h1 className="text-2xl font-semibold tracking-tight">{project.name}</h1>
         <a

@@ -21,11 +21,12 @@ import {
 } from "./enums";
 
 export const createdAt = () => timestamp({ withTimezone: true }).notNull().defaultNow();
+// Both timestamps come from the database clock (not the app server's) so they stay comparable.
 export const updatedAt = () =>
   timestamp({ withTimezone: true })
     .notNull()
     .defaultNow()
-    .$onUpdate(() => new Date());
+    .$onUpdate(() => sql`now()`);
 
 export const project = pgTable(
   "project",

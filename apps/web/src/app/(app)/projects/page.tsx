@@ -78,7 +78,12 @@ export default async function ProjectsPage({
               </Link>
             </p>
           ) : (
-            <div className="overflow-x-auto rounded-lg border border-border bg-surface">
+            <div
+              role="region"
+              aria-label="Projects table"
+              tabIndex={0}
+              className="overflow-x-auto rounded-lg border border-border bg-surface"
+            >
               <table className="w-full min-w-[720px] text-left text-sm">
                 <caption className="sr-only">
                   Projects, {total} total, page {page} of {pages}
