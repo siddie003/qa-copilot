@@ -32,15 +32,28 @@ const reject = (code: UrlRejectionCode, message: string): UrlValidationResult =>
 });
 
 /**
- * Adds https:// when the user typed a bare host ("example.com", "localhost:4100").
+ * Adds a scheme when the user typed a bare host. Public hosts get https://. Local development
+ * hosts (localhost, *.localhost, loopback IPs) and explicitly allowlisted hosts get http://,
+ * because local servers almost never have TLS certificates.
  * Inputs with another explicit scheme ("ftp://", "javascript:") are left alone so they get rejected.
  */
-export function withDefaultScheme(raw: string): string {
+export function withDefaultScheme(raw: string, allowedPrivateHosts: string[] = []): string {
   const input = raw.trim();
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(input)) return input;
   // "mailto:x", "javascript:..." — a scheme not followed by a port number.
   if (/^[a-z][a-z0-9+.-]*:(?!\d)/i.test(input)) return input;
-  return `https://${input}`;
+  const hostPort = input.split(/[/?#]/, 1)[0]!.toLowerCase();
+  const host = hostPort.startsWith("[")
+    ? hostPort.slice(0, hostPort.indexOf("]") + 1)
+    : hostPort.split(":")[0]!;
+  const local =
+    host === "localhost" ||
+    host.endsWith(".localhost") ||
+    /^127\.\d+\.\d+\.\d+$/.test(host) ||
+    host === "[::1]" ||
+    allowedPrivateHosts.includes(hostPort) ||
+    allowedPrivateHosts.includes(host);
+  return `${local ? "http" : "https"}://${input}`;
 }
 
 /** Classifies an IP literal. Only globally routable unicast addresses are allowed. */
@@ -67,7 +80,7 @@ export function validateWebsiteUrl(
   raw: string,
   opts: UrlValidationOptions = {},
 ): UrlValidationResult {
-  const input = withDefaultScheme(raw);
+  const input = withDefaultScheme(raw, opts.allowedPrivateHosts);
   if (input.length > MAX_URL_LENGTH)
     return reject("URL_TOO_LONG", `URL must be at most ${MAX_URL_LENGTH} characters`);
 

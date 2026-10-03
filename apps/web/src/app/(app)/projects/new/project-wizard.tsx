@@ -7,6 +7,12 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { Alert } from "@/components/ui/alert";
 import { Button, ButtonLink } from "@/components/ui/button";
+import {
+  EMPTY_AUTH,
+  SiteAuthFields,
+  toPayload,
+  type SiteAuthDraft,
+} from "@/components/projects/site-auth-fields";
 import { Field, inputClasses } from "@/components/ui/field";
 import { useToast } from "@/components/ui/toast";
 import { ApiError, apiFetch } from "@/lib/api-client";
@@ -44,6 +50,8 @@ export function ProjectWizard({ defaults, scanners }: Props) {
   const [maxPages, setMaxPages] = useState(defaults.maxPages);
   const [maxDepth, setMaxDepth] = useState(defaults.maxDepth);
   const [respectRobots, setRespectRobots] = useState(defaults.respectRobots);
+  const [auth, setAuth] = useState<SiteAuthDraft>(EMPTY_AUTH);
+  const [authErrors, setAuthErrors] = useState<Record<string, string>>({});
 
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [pending, setPending] = useState(false);
@@ -98,6 +106,20 @@ export function ProjectWizard({ defaults, scanners }: Props) {
     if (!viewports.length) e.viewports = "Select at least one viewport.";
     if (!(maxPages >= 1 && maxPages <= 500)) e.maxPages = "Enter a number from 1 to 500.";
     if (!(maxDepth >= 0 && maxDepth <= 10)) e.maxDepth = "Enter a number from 0 to 10.";
+    const a: Record<string, string> = {};
+    if (auth.type === "basic") {
+      if (!auth.username.trim()) a.username = "Enter the username.";
+      if (!auth.password) a.password = "Enter the password.";
+    }
+    if (auth.type === "header") {
+      if (!/^[A-Za-z0-9-]{1,64}$/.test(auth.name.trim()))
+        a.name = "Use letters, digits and dashes.";
+      if (!auth.value) a.value = "Enter the header value.";
+    }
+    if (auth.type === "cookies" && !/^\s*[^=;\s]+=/.test(auth.cookies))
+      a.cookies = 'Use the format "name=value; name2=value2".';
+    setAuthErrors(a);
+    if (Object.keys(a).length) e.auth = "invalid";
     setErrors(e);
     if (!Object.keys(e).length) setStep(4);
   }
@@ -123,6 +145,21 @@ export function ProjectWizard({ defaults, scanners }: Props) {
       });
       setCreatedId(project.id);
       toast.success(`Project “${name.trim()}” created.`);
+      const authPayload = toPayload(auth);
+      if (authPayload) {
+        try {
+          await apiFetch(`/api/v1/projects/${project.id}/scan-auth`, {
+            method: "PUT",
+            body: authPayload,
+          });
+        } catch (err) {
+          toast.error(
+            `The project was created, but the site credentials were not saved: ${
+              err instanceof ApiError ? err.message : "unknown error"
+            }. Add them in project settings.`,
+          );
+        }
+      }
       setStep(5);
     } catch (err) {
       const message = err instanceof ApiError ? err.message : "Project could not be created.";
@@ -410,10 +447,10 @@ export function ProjectWizard({ defaults, scanners }: Props) {
                 </span>
               </span>
             </label>
-            <p className="text-xs text-subtle">
-              Scanning sites behind a login is not supported yet; only publicly reachable pages are
-              scanned.
-            </p>
+            <fieldset className="rounded-md border border-border p-4">
+              <legend className="px-1 text-sm font-medium">Site authentication (optional)</legend>
+              <SiteAuthFields value={auth} onChange={setAuth} errors={authErrors} />
+            </fieldset>
             <div className="flex gap-2">
               <Button type="submit">Continue</Button>
               <Button variant="secondary" onClick={() => setStep(2)}>
@@ -442,6 +479,17 @@ export function ProjectWizard({ defaults, scanners }: Props) {
                 [
                   "Viewports",
                   viewports.map((v) => `${v.name} ${v.width}×${v.height}`).join(", "),
+                  3,
+                ],
+                [
+                  "Site authentication",
+                  auth.type === "none"
+                    ? "None (public pages only)"
+                    : auth.type === "basic"
+                      ? `HTTP Basic as “${auth.username}”`
+                      : auth.type === "header"
+                        ? `Header “${auth.name}”`
+                        : "Session cookies",
                   3,
                 ],
                 [

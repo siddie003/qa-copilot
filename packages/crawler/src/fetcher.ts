@@ -18,6 +18,11 @@ export interface FetchOptions {
   signal?: AbortSignal;
   resolve?: Resolver;
   method?: "GET" | "HEAD";
+  /**
+   * Extra headers per URL (site credentials). Called for every hop, so a redirect to another
+   * site never receives them.
+   */
+  authHeaders?: (url: string) => Record<string, string>;
 }
 
 export interface RedirectHop {
@@ -128,6 +133,7 @@ async function fetchOnce(url: string, opts: FetchOptions): Promise<FetchResult> 
         "user-agent": opts.userAgent,
         accept: "text/html,application/xhtml+xml,*/*;q=0.8",
         "accept-language": "en",
+        ...(opts.authHeaders?.(current) ?? {}),
       },
       headersTimeout: opts.timeoutMs,
       bodyTimeout: opts.timeoutMs,

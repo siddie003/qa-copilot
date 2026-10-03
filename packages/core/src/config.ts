@@ -62,6 +62,8 @@ export const configSchema = z
       ),
 
     WORKER_HEALTH_PORT: int(0, 65_535).default(3001),
+    /** Scans one worker process runs in parallel (each uses its own browser). */
+    WORKER_CONCURRENCY: int(1, 8).default(1),
 
     DEMO_MODE_ENABLED: bool.default(true),
     DEMO_SITE_PORT: int(1, 65_535).default(4100),

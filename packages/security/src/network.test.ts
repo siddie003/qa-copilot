@@ -18,6 +18,7 @@ const dnsTable = fakeDns({
   "rebind.example": ["10.0.0.7"],
   "mixed.example": ["93.184.216.34", "127.0.0.1"],
   "v6local.example": ["fd00::1"],
+  localhost: ["127.0.0.1"],
 });
 const policy = { allowedPrivateHosts: ["localhost:4100"] };
 
@@ -42,7 +43,7 @@ describe("assertPublicTarget", () => {
     ["http://169.254.169.254/latest", "PRIVATE_ADDRESS"],
     ["ftp://public.example/", "UNSUPPORTED_SCHEME"],
     ["http://localhost:4100/", "OK"],
-    ["http://localhost:5432/", "DNS_FAILURE"],
+    ["http://localhost:5432/", "PRIVATE_ADDRESS"],
   ])("%s → %s", async (url, expected) => {
     expect(await reason(url)).toBe(expected);
   });

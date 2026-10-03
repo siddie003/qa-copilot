@@ -133,3 +133,21 @@ export const contentBlock = pgTable(
   },
   (t) => [index("content_block_document_idx").on(t.documentId, t.order)],
 );
+
+/**
+ * Encrypted per-project secrets (AES-256-GCM with ENCRYPTION_KEY, bound to the project id).
+ * `summary` is the non-secret description shown in the UI (type, username, header/cookie names).
+ */
+export const projectSecret = pgTable(
+  "project_secret",
+  {
+    projectId: uuid()
+      .notNull()
+      .references(() => project.id, { onDelete: "cascade" }),
+    kind: varchar({ length: 32 }).notNull(),
+    ciphertext: text().notNull(),
+    summary: jsonb().$type<Record<string, unknown>>().notNull(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [unique("project_secret_project_kind_uq").on(t.projectId, t.kind)],
+);

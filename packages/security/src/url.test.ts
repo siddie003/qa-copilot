@@ -16,12 +16,24 @@ describe("withDefaultScheme", () => {
   it.each([
     ["example.com", "https://example.com"],
     ["  example.com/path ", "https://example.com/path"],
-    ["localhost:4100", "https://localhost:4100"],
+    ["localhost:4100", "http://localhost:4100"],
+    ["127.0.0.1:8080/x", "http://127.0.0.1:8080/x"],
+    ["app.localhost", "http://app.localhost"],
+    ["[::1]:3000", "http://[::1]:3000"],
     ["http://example.com", "http://example.com"],
     ["javascript:alert(1)", "javascript:alert(1)"],
     ["mailto:a@b.com", "mailto:a@b.com"],
   ])("%s → %s", (input, expected) => {
     expect(withDefaultScheme(input)).toBe(expected);
+  });
+});
+
+describe("withDefaultScheme with an allowlist", () => {
+  it("uses http for allowlisted internal hosts and https for everything else", () => {
+    expect(withDefaultScheme("staging.internal:8080/a", ["staging.internal:8080"])).toBe(
+      "http://staging.internal:8080/a",
+    );
+    expect(withDefaultScheme("example.com", ["staging.internal:8080"])).toBe("https://example.com");
   });
 });
 
@@ -44,7 +56,10 @@ describe("validateWebsiteUrl: accepted", () => {
     expect(ok("https://bücher.de").hostname).toBe("xn--bcher-kva.de");
   });
   it("accepts allowlisted private hosts (host:port)", () => {
-    expect(ok("localhost:4100", ["localhost:4100"]).allowlisted).toBe(true);
+    expect(ok("localhost:4100", ["localhost:4100"])).toMatchObject({
+      allowlisted: true,
+      url: "http://localhost:4100/",
+    });
   });
   it("accepts allowlisted hosts without a port entry", () => {
     expect(ok("http://staging.internal/", ["staging.internal"]).allowlisted).toBe(true);

@@ -1,5 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { errorFields, type AppConfig, type Logger, type ScanConfigSnapshot } from "@qa/core";
+import {
+  authHeadersFor,
+  errorFields,
+  scanAuthSchema,
+  type AppConfig,
+  type Logger,
+  type ScanAuth,
+  type ScanConfigSnapshot,
+} from "@qa/core";
 import {
   capturePage,
   launchBrowser,
@@ -16,11 +24,12 @@ import {
   type FetchOptions,
   type RobotsRules,
 } from "@qa/crawler";
-import { pipelineRepo, type Database } from "@qa/db";
+import { pipelineRepo, secretsRepo, type Database } from "@qa/db";
 import {
   assertPublicTarget,
   BlockedTargetError,
   createGuardedDispatcher,
+  decryptSecret,
   validateWebsiteUrl,
   type Resolver,
   type TargetPolicy,
@@ -58,6 +67,10 @@ class StepTimeoutError extends Error {}
 
 interface ScanState {
   scanId: string;
+  projectId: string;
+  /** Canonical site URL (start URL after redirects); credentials are limited to this site. */
+  siteUrl: string;
+  credentials: ScanAuth | null;
   snapshot: ScanConfigSnapshot;
   policy: TargetPolicy;
   fetchOpts: FetchOptions;
@@ -70,7 +83,7 @@ interface ScanState {
 /** Executes one claimed scan end to end. Never throws: all failures are recorded on the scan. */
 export async function runScan(
   rt: ScanRuntime,
-  scanRow: { id: string; configSnapshot: Record<string, unknown> },
+  scanRow: { id: string; projectId: string; configSnapshot: Record<string, unknown> },
 ) {
   const snapshot = scanRow.configSnapshot as unknown as ScanConfigSnapshot;
   const log = rt.log.child({ scanId: scanRow.id });
@@ -82,6 +95,9 @@ export async function runScan(
   const abort = new AbortController();
   const state: ScanState = {
     scanId: scanRow.id,
+    projectId: scanRow.projectId,
+    siteUrl: snapshot.websiteUrl,
+    credentials: null,
     snapshot,
     policy,
     abort,
@@ -95,6 +111,8 @@ export async function runScan(
       timeoutMs: snapshot.pageTimeoutMs,
       retries: rt.config.LINK_CHECK_RETRIES,
       resolve: rt.resolve,
+      // Evaluated per request/redirect hop: credentials only ever go to the scanned site.
+      authHeaders: (url) => authHeadersFor(state.credentials, state.siteUrl, url),
     },
   };
 
@@ -210,11 +228,44 @@ export async function runScan(
   log.info({ durationMs: Date.now() - started, cancelled, fatal, anyFailed }, "scan finished");
 }
 
+/** Decrypts the project's site credentials. Returns a fatal outcome if they are unusable. */
+async function loadCredentials(rt: ScanRuntime, s: ScanState): Promise<StepOutcome | null> {
+  const fail = (error: string): StepOutcome => ({
+    status: "failed",
+    error,
+    fatal: "Site credentials unavailable",
+  });
+  const row = await secretsRepo.getProjectSecret(rt.db, s.projectId, secretsRepo.SCAN_AUTH_KIND);
+  if (!row)
+    return fail("Site credentials were removed after this scan was queued. Start a new scan.");
+  if (!rt.config.ENCRYPTION_KEY)
+    return fail(
+      "ENCRYPTION_KEY is not configured on the worker, so site credentials cannot be decrypted.",
+    );
+  try {
+    const parsed = scanAuthSchema.safeParse(
+      JSON.parse(decryptSecret(row.ciphertext, rt.config.ENCRYPTION_KEY, s.projectId)),
+    );
+    if (!parsed.success)
+      return fail("Stored site credentials are invalid. Save them again in project settings.");
+    s.credentials = parsed.data;
+    return null;
+  } catch {
+    return fail(
+      "Site credentials could not be decrypted (was ENCRYPTION_KEY changed?). Save them again in project settings.",
+    );
+  }
+}
+
 async function preflight(rt: ScanRuntime, s: ScanState): Promise<StepOutcome> {
   const url = s.snapshot.websiteUrl;
   const check = validateWebsiteUrl(url, { allowedPrivateHosts: s.policy.allowedPrivateHosts });
   if (!check.ok)
     return { status: "failed", error: check.message, fatal: "Website URL is not allowed" };
+  if (s.snapshot.authType) {
+    const loaded = await loadCredentials(rt, s);
+    if (loaded) return loaded;
+  }
   try {
     await assertPublicTarget(check.url, s.policy, rt.resolve);
   } catch (err) {
@@ -234,9 +285,14 @@ async function preflight(rt: ScanRuntime, s: ScanState): Promise<StepOutcome> {
 
   const res = await guardedFetch(check.url, { ...s.fetchOpts, signal: s.abort.signal });
   if (res.error) {
+    const tls = /CERT|TLS|SSL|EPROTO|ERR_SSL/i.test(`${res.error.code} ${res.error.message}`);
     return {
       status: "failed",
-      error: `Website unreachable: ${res.error.code} – ${res.error.message}`,
+      error: `Website unreachable: ${res.error.code} – ${res.error.message}${
+        tls && check.url.startsWith("https:")
+          ? " (the HTTPS connection failed; if the site only serves plain HTTP, use an http:// URL)"
+          : ""
+      }`,
       fatal: "Website unreachable",
     };
   }
@@ -244,7 +300,10 @@ async function preflight(rt: ScanRuntime, s: ScanState): Promise<StepOutcome> {
   if ([401, 403, 407, 429].includes(status)) {
     return {
       status: "inconclusive",
-      statusReason: `The start page answered HTTP ${status}. The site requires authentication or blocks automated access, so it cannot be scanned.`,
+      statusReason:
+        s.credentials && (status === 401 || status === 403)
+          ? `The start page answered HTTP ${status} even with the configured ${s.credentials.type} credentials. Check the site credentials in project settings.`
+          : `The start page answered HTTP ${status}. The site requires authentication or blocks automated access, so it cannot be scanned. Site credentials can be added in project settings.`,
       fatal: `Start page returned HTTP ${status}`,
     };
   }
@@ -256,6 +315,7 @@ async function preflight(rt: ScanRuntime, s: ScanState): Promise<StepOutcome> {
     };
   }
   s.startFinalUrl = res.finalUrl;
+  s.siteUrl = res.finalUrl;
 
   const technologies = detectTechnology({
     url: res.finalUrl,
@@ -290,20 +350,32 @@ async function preflight(rt: ScanRuntime, s: ScanState): Promise<StepOutcome> {
   return { status: "completed", statusReason: parts.join("; ") };
 }
 
-async function ensureBrowser(s: ScanState) {
-  s.browser ??= await launchBrowser();
+/** One Chromium per scan; all its traffic goes through the guard proxy (no own DNS lookups). */
+async function ensureBrowser(rt: ScanRuntime, s: ScanState) {
+  s.browser ??= await launchBrowser({ guard: { policy: s.policy, resolve: rt.resolve } });
   return s.browser;
 }
 
-async function crawlStep(rt: ScanRuntime, s: ScanState): Promise<StepOutcome> {
-  const browser = await ensureBrowser(s);
-  const desktop = s.snapshot.viewports[0] ?? { name: "desktop", width: 1440, height: 900 };
-  const { context } = await newGuardedContext(browser, {
-    viewport: desktop,
+/** Guarded browser context for one viewport, with the site's credentials if configured. */
+async function openContext(
+  rt: ScanRuntime,
+  s: ScanState,
+  viewport: { name: string; width: number; height: number },
+) {
+  const browser = await ensureBrowser(rt, s);
+  return newGuardedContext(browser, {
+    viewport,
     userAgent: s.snapshot.userAgent,
     policy: s.policy,
     resolve: rt.resolve,
+    ...(s.credentials ? { auth: { siteUrl: s.siteUrl, credentials: s.credentials } } : {}),
   });
+}
+
+async function crawlStep(rt: ScanRuntime, s: ScanState): Promise<StepOutcome> {
+  const browser = await ensureBrowser(rt, s);
+  const desktop = s.snapshot.viewports[0] ?? { name: "desktop", width: 1440, height: 900 };
+  const { context } = await openContext(rt, s, desktop);
   let stored = 0;
   try {
     const summary = await crawl(
@@ -377,7 +449,7 @@ async function crawlStep(rt: ScanRuntime, s: ScanState): Promise<StepOutcome> {
 }
 
 async function captureStep(rt: ScanRuntime, s: ScanState): Promise<StepOutcome> {
-  const browser = await ensureBrowser(s);
+  const browser = await ensureBrowser(rt, s);
   const pages = await pipelineRepo.listCapturablePages(rt.db, s.scanId);
   if (pages.length === 0)
     return {
@@ -388,12 +460,7 @@ async function captureStep(rt: ScanRuntime, s: ScanState): Promise<StepOutcome> 
   let failed = 0;
   const failures: string[] = [];
   for (const viewport of s.snapshot.viewports) {
-    const { context, guard } = await newGuardedContext(browser, {
-      viewport,
-      userAgent: s.snapshot.userAgent,
-      policy: s.policy,
-      resolve: rt.resolve,
-    });
+    const { context, guard } = await openContext(rt, s, viewport);
     try {
       for (const p of pages) {
         if (s.abort.signal.aborted) throw new CancelledError();
@@ -401,6 +468,7 @@ async function captureStep(rt: ScanRuntime, s: ScanState): Promise<StepOutcome> 
         const r = await capturePage(context, guard, target, viewport, {
           timeoutMs: s.snapshot.pageTimeoutMs,
           screenshot: true,
+          proxy: browser.proxy,
         });
         const base = `scans/${s.scanId}/pages/${p.id}/${viewport.name}`;
         const screenshotKey = r.screenshot

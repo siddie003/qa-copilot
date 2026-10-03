@@ -44,6 +44,8 @@ export default defineConfig({
             BETTER_AUTH_SECRET:
               rootEnv.BETTER_AUTH_SECRET ?? "integration-test-secret-0123456789abcdef",
             APP_URL: "http://localhost:3000",
+            // Fixed test-only key (never used outside the _test database).
+            ENCRYPTION_KEY: "0".repeat(63) + "1",
           },
         },
       },

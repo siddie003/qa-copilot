@@ -1,6 +1,6 @@
 import "server-only";
 import { AppError, getConfig, notFound, planScanSteps, type ScanConfigSnapshot } from "@qa/core";
-import { getDb, pipelineRepo } from "@qa/db";
+import { getDb, pipelineRepo, secretsRepo } from "@qa/db";
 import { z } from "zod";
 import { getProject } from "./projects";
 
@@ -25,6 +25,7 @@ export async function startScan(userId: string, projectId: string) {
     throw new AppError("CONFLICT", "A scan of this project is already queued or running");
   const cfg = getConfig();
   const d = project.scanDefaults;
+  const auth = await secretsRepo.getProjectSecret(db, project.id, secretsRepo.SCAN_AUTH_KIND);
   const snapshot: ScanConfigSnapshot = {
     websiteUrl: project.websiteUrl,
     scanners: d.scanners,
@@ -36,6 +37,7 @@ export async function startScan(userId: string, projectId: string) {
     concurrency: cfg.SCAN_CONCURRENCY,
     userAgent: cfg.SCAN_USER_AGENT,
     authorizationAttestedAt: new Date().toISOString(),
+    authType: (auth?.summary.type as ScanConfigSnapshot["authType"]) ?? null,
   };
   const scan = await pipelineRepo.createScan(db, userId, project.id, {
     configSnapshot: snapshot as unknown as Record<string, unknown>,

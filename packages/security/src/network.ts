@@ -46,34 +46,8 @@ function allowlistedHostnames(policy: TargetPolicy): Set<string> {
   return new Set(policy.allowedPrivateHosts.map((h) => bare(h.replace(/:\d+$/, ""))));
 }
 
-/**
- * Resolves the URL's host and rejects it unless every address is publicly routable (or the
- * host:port is explicitly allowlisted). Call before every outgoing request and redirect hop.
- */
-export async function assertPublicTarget(
-  rawUrl: string,
-  policy: TargetPolicy,
-  resolve: Resolver = systemResolver,
-): Promise<void> {
-  const url = new URL(rawUrl);
-  const host = bare(url.hostname);
-  if (url.protocol !== "http:" && url.protocol !== "https:")
-    throw new BlockedTargetError(
-      "UNSUPPORTED_SCHEME",
-      host,
-      `Scheme ${url.protocol} is not allowed`,
-    );
-  if (isAllowlisted(url, policy)) return;
-
-  if (ipaddr.isValid(host)) {
-    if (!isPublicIp(host))
-      throw new BlockedTargetError(
-        "PRIVATE_ADDRESS",
-        host,
-        `${host} is a private or reserved address`,
-      );
-    return;
-  }
+async function lookupAll(host: string, resolve: Resolver): Promise<LookupAddress[]> {
+  if (ipaddr.isValid(host)) return [{ address: host, family: host.includes(":") ? 6 : 4 }];
   let addresses: LookupAddress[];
   try {
     addresses = await resolve(host);
@@ -86,13 +60,51 @@ export async function assertPublicTarget(
   }
   if (addresses.length === 0)
     throw new BlockedTargetError("DNS_FAILURE", host, `Host ${host} has no addresses`);
+  return addresses;
+}
+
+/**
+ * Resolves the URL's host and returns the addresses that may be connected to. Throws unless every
+ * address is publicly routable, or the host:port is explicitly allowlisted. Connecting to one of
+ * the returned addresses (instead of resolving again) is what defeats DNS rebinding.
+ */
+export async function resolvePublicTarget(
+  rawUrl: string,
+  policy: TargetPolicy,
+  resolve: Resolver = systemResolver,
+): Promise<LookupAddress[]> {
+  const url = new URL(rawUrl);
+  const host = bare(url.hostname);
+  if (url.protocol !== "http:" && url.protocol !== "https:")
+    throw new BlockedTargetError(
+      "UNSUPPORTED_SCHEME",
+      host,
+      `Scheme ${url.protocol} is not allowed`,
+    );
+  const addresses = await lookupAll(host, resolve);
+  if (isAllowlisted(url, policy)) return addresses;
   const blocked = addresses.find((a) => !isPublicIp(a.address));
   if (blocked)
     throw new BlockedTargetError(
       "PRIVATE_ADDRESS",
       host,
-      `${host} resolves to a private or reserved address (${blocked.address})`,
+      ipaddr.isValid(host)
+        ? `${host} is a private or reserved address`
+        : `${host} resolves to a private or reserved address (${blocked.address})`,
     );
+  return addresses;
+}
+
+/**
+ * Rejects the URL unless every resolved address is publicly routable (or the host:port is
+ * explicitly allowlisted). Call before every outgoing request and redirect hop.
+ */
+export async function assertPublicTarget(
+  rawUrl: string,
+  policy: TargetPolicy,
+  resolve: Resolver = systemResolver,
+): Promise<void> {
+  await resolvePublicTarget(rawUrl, policy, resolve);
 }
 
 type LookupCallback = (

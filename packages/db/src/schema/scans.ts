@@ -66,6 +66,8 @@ export const scannerRun = pgTable(
     findingCount: integer().notNull().default(0),
     toolName: varchar({ length: 128 }),
     toolVersion: varchar({ length: 64 }),
+    /** What the scanner checked: counts and checks that could not be verified (inconclusive). */
+    checks: jsonb().$type<Record<string, unknown>>(),
     startedAt: timestamp({ withTimezone: true }),
     finishedAt: timestamp({ withTimezone: true }),
     durationMs: integer(),
@@ -114,6 +116,8 @@ export const pageCapture = pgTable(
     computedStylesKey: text(),
     consoleMessages: jsonb().$type<Array<Record<string, unknown>>>(),
     timings: jsonb().$type<Record<string, unknown>>(),
+    /** In-page measurements: web vitals, layout (overflow, overlaps, tap targets), images. */
+    metrics: jsonb().$type<Record<string, unknown>>(),
     error: text(),
     createdAt: createdAt(),
   },
@@ -135,7 +139,8 @@ export const networkRequest = pgTable(
     decodedSize: bigint({ mode: "number" }),
     durationMs: integer(),
     failureText: text(),
-    fromCache: boolean().notNull().default(false),
+    /** Null: not observable (Playwright does not expose HTTP cache hits). */
+    fromCache: boolean(),
     isMixedContent: boolean().notNull().default(false),
   },
   (t) => [index("network_request_capture_idx").on(t.pageCaptureId)],

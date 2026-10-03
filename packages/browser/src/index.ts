@@ -4,7 +4,11 @@ import {
   type Resolver,
   type TargetPolicy,
 } from "@qa/security";
+import { authHeadersFor, isOnSite, parseCookieString, type ScanAuth } from "@qa/core";
 import { chromium, type Browser, type BrowserContext, type Page, type Request } from "playwright";
+import { startGuardProxy, type GuardProxy } from "./proxy";
+
+export { startGuardProxy, type GuardProxy };
 
 export interface ViewportSpec {
   name: string;
@@ -15,12 +19,39 @@ export interface ViewportSpec {
 export interface BrowserSession {
   browser: Browser;
   version: string;
+  /** Present when all browser traffic goes through the guard proxy. */
+  proxy: GuardProxy | null;
   close(): Promise<void>;
 }
 
-export async function launchBrowser(): Promise<BrowserSession> {
-  const browser = await chromium.launch({ headless: true, args: ["--disable-dev-shm-usage"] });
-  return { browser, version: `Chromium ${browser.version()}`, close: () => browser.close() };
+/**
+ * Launches headless Chromium. With `guard`, every request (including localhost) is forced through
+ * the guard proxy, so Chromium never resolves DNS itself (see proxy.ts).
+ */
+export async function launchBrowser(
+  opts: { guard?: { policy: TargetPolicy; resolve?: Resolver } } = {},
+): Promise<BrowserSession> {
+  const proxy = opts.guard ? await startGuardProxy(opts.guard.policy, opts.guard.resolve) : null;
+  try {
+    const browser = await chromium.launch({
+      headless: true,
+      args: ["--disable-dev-shm-usage"],
+      // "<-loopback>" removes Chromium's implicit proxy bypass for localhost/127.0.0.1.
+      ...(proxy ? { proxy: { server: proxy.url, bypass: "<-loopback>" } } : {}),
+    });
+    return {
+      browser,
+      proxy,
+      version: `Chromium ${browser.version()}`,
+      close: async () => {
+        await browser.close();
+        await proxy?.close();
+      },
+    };
+  } catch (err) {
+    await proxy?.close();
+    throw err;
+  }
 }
 
 export interface GuardState {
@@ -37,6 +68,7 @@ async function installNetworkGuard(
   policy: TargetPolicy,
   resolve: Resolver | undefined,
   state: GuardState,
+  auth: SiteAuth | undefined,
 ) {
   const cache = new Map<string, Promise<string | null>>();
   await context.route("**/*", async (route) => {
@@ -57,8 +89,22 @@ async function installNetworkGuard(
       state.blocked.push({ url, reason });
       return route.abort("blockedbyclient");
     }
+    // Header credentials are added only to requests for the scanned site.
+    if (auth?.credentials.type === "header" && isOnSite(url, auth.siteUrl)) {
+      return route.continue({
+        headers: {
+          ...route.request().headers(),
+          ...authHeadersFor(auth.credentials, auth.siteUrl, url),
+        },
+      });
+    }
     return route.continue();
   });
+}
+
+export interface SiteAuth {
+  siteUrl: string;
+  credentials: ScanAuth;
 }
 
 export interface ContextOptions {
@@ -66,6 +112,8 @@ export interface ContextOptions {
   userAgent: string;
   policy: TargetPolicy;
   resolve?: Resolver;
+  /** Credentials for login-protected sites; applied to the scanned site only. */
+  auth?: SiteAuth;
 }
 
 export async function newGuardedContext(session: BrowserSession, opts: ContextOptions) {
@@ -79,9 +127,29 @@ export async function newGuardedContext(session: BrowserSession, opts: ContextOp
     serviceWorkers: "block",
     ignoreHTTPSErrors: false,
     javaScriptEnabled: true,
+    ...(opts.auth?.credentials.type === "basic"
+      ? {
+          httpCredentials: {
+            username: opts.auth.credentials.username,
+            password: opts.auth.credentials.password,
+            // Basic credentials are only ever sent to the scanned site's origin.
+            origin: new URL(opts.auth.siteUrl).origin,
+          },
+        }
+      : {}),
   });
+  if (opts.auth?.credentials.type === "cookies") {
+    const origin = new URL(opts.auth.siteUrl).origin;
+    await context.addCookies(
+      parseCookieString(opts.auth.credentials.cookies).map((c) => ({
+        name: c.name,
+        value: c.value,
+        url: origin,
+      })),
+    );
+  }
   const guard: GuardState = { blocked: [] };
-  await installNetworkGuard(context, opts.policy, opts.resolve, guard);
+  await installNetworkGuard(context, opts.policy, opts.resolve, guard, opts.auth);
   return { context, guard };
 }
 
@@ -94,7 +162,7 @@ export interface CapturedRequest {
   decodedSize: number | null;
   durationMs: number | null;
   failureText: string | null;
-  fromCache: boolean;
+  fromCache: boolean | null;
   isMixedContent: boolean;
 }
 
@@ -192,8 +260,8 @@ function attachCollectors(page: Page, pageUrl: string) {
           decodedSize: declaredLength(response?.headers()["content-length"]),
           durationMs: t.responseEnd > 0 ? Math.round(t.responseEnd) : null,
           failureText: failed ? (req.failure()?.errorText ?? "failed") : null,
-          // Playwright does not expose HTTP cache hits; each scan uses a fresh context.
-          fromCache: false,
+          // Playwright does not expose HTTP cache hits: unknown, not "false".
+          fromCache: null,
           isMixedContent: isHttpsPage && req.url().startsWith("http:"),
         });
       })(),
@@ -210,10 +278,11 @@ export async function capturePage(
   guard: GuardState,
   url: string,
   viewport: ViewportSpec,
-  opts: { timeoutMs: number; screenshot: boolean },
+  opts: { timeoutMs: number; screenshot: boolean; proxy?: GuardProxy | null },
 ): Promise<PageCaptureResult> {
   const page = await context.newPage();
   const blockedBefore = guard.blocked.length;
+  const proxyBlockedBefore = opts.proxy?.blocked.length ?? 0;
   const collectors = attachCollectors(page, url);
   const base: PageCaptureResult = {
     viewport,
@@ -263,7 +332,10 @@ export async function capturePage(
     base.error = (err as Error).message.split("\n")[0]!.slice(0, 500);
   } finally {
     await collectors.settle();
-    base.blockedRequests = guard.blocked.slice(blockedBefore);
+    base.blockedRequests = [
+      ...guard.blocked.slice(blockedBefore),
+      ...(opts.proxy?.blocked.slice(proxyBlockedBefore) ?? []),
+    ];
     await page.close().catch(() => {});
   }
   return base;

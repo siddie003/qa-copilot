@@ -9,7 +9,7 @@ export interface WorkerStatus {
   uptimeSeconds: number;
   database: (DatabaseHealth & { checkedAt: string }) | { status: "pending" };
   scanWorker?:
-    | { status: "running"; workerId: string; currentScanId: string | null }
+    | { status: "running"; workerId: string; concurrency: number; currentScanIds: string[] }
     | { status: "not_started" };
 }
 

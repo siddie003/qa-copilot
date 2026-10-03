@@ -50,6 +50,7 @@ async function main() {
       scanWorker = await startScanWorker(
         { db: getDb(), storage: createLocalStorage(config.storageDirAbsolute), config, log },
         config.DATABASE_URL,
+        config.WORKER_CONCURRENCY,
       );
     } catch (err) {
       log.error(errorFields(err), "could not start scan worker; retrying on next database check");
@@ -87,7 +88,8 @@ async function main() {
       ? {
           status: "running",
           workerId: scanWorker.workerId,
-          currentScanId: scanWorker.currentScanId(),
+          concurrency: scanWorker.concurrency,
+          currentScanIds: scanWorker.currentScanIds(),
         }
       : { status: "not_started" },
   });

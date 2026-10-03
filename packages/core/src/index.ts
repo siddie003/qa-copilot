@@ -4,6 +4,7 @@ export * from "./env";
 export * from "./errors";
 export * from "./figma";
 export * from "./pipeline";
+export * from "./scan-auth";
 export * from "./logger";
 export * from "./redact";
 

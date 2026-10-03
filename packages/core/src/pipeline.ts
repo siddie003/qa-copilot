@@ -57,4 +57,6 @@ export interface ScanConfigSnapshot {
   concurrency: number;
   userAgent: string;
   authorizationAttestedAt: string;
+  /** Type of site credentials used (never the credentials themselves); null = none. */
+  authType?: "basic" | "header" | "cookies" | null;
 }

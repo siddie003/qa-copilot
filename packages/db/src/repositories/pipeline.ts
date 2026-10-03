@@ -300,7 +300,7 @@ export async function insertCapture(
       decodedSize: number | null;
       durationMs: number | null;
       failureText: string | null;
-      fromCache: boolean;
+      fromCache: boolean | null;
       isMixedContent: boolean;
     }>;
   },
