@@ -1,0 +1,43 @@
+{
+  "name": "qa-copilot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "AI-powered website QA, design and brand compliance platform",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "setup:env": "node scripts/setup-env.mjs",
+    "db:bootstrap": "node scripts/db/bootstrap.mjs",
+    "db:check": "npm run check-connection -w @qa/db",
+    "db:generate": "npm run generate -w @qa/db",
+    "db:migrate": "npm run migrate -w @qa/db",
+    "dev": "concurrently -n web,worker -c blue,magenta \"npm:dev:web\" \"npm:dev:worker\"",
+    "dev:web": "npm run dev -w @qa/web",
+    "dev:worker": "npm run dev -w @qa/worker",
+    "build": "npm run build -w @qa/web",
+    "start:web": "npm run start -w @qa/web",
+    "start:worker": "npm run start -w @qa/worker",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "concurrently": "^10.0.5",
+    "eslint": "^9.39.5",
+    "prettier": "^3.9.9",
+    "tsx": "^4.23.15",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.71.0",
+    "vitest": "^5.0.3"
+  }
+}

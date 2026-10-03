@@ -1,32 +1,63 @@
-# Project Status — QA Copilot
+# Project Status: QA Copilot
 
 _Last updated: 2026-10-03_
 
 ## Completed phases
-- None approved yet.
+- **Phase 0: Requirements & Architecture.** Approved 2026-10-03. Output: `docs/ARCHITECTURE.md`.
 
 ## Current phase
-**Phase 0 — Requirements & Architecture** — deliverable complete, **awaiting approval**.
+**Phase 1: Project Foundation.** Implemented and verified. **Awaiting approval.**
+- One verification step is waiting on the user: creating the app database (`npm run db:bootstrap`
+  needs the PostgreSQL superuser password). After that, `npm run db:check` and
+  `/api/v1/health/ready` should report the database as connected.
 
-## Phase 0 output
-- `docs/ARCHITECTURE.md` — architecture diagram, stack, entity model, folder structure, API, scanner/AI/grounding design, frontend IA, security, roadmap, dependencies, env vars, risks.
+## Phase 1 features implemented
+- npm-workspaces monorepo: `apps/web`, `apps/worker`, `packages/core`, `packages/db`
+- TypeScript 6 strict config, ESLint 9 (typescript-eslint, Next.js, jsx-a11y rules), Prettier
+- `@qa/core`: zod-validated env config (single root `.env`), `ConfigError` (variable names only),
+  pino JSON logger with secret redaction, `AppError` + RFC 9457 problem details, URL credential masking
+- `@qa/db`: pg pool + Drizzle client, `checkDatabase()` real round-trip health check with
+  classified errors, migration runner, connection-check CLI, drizzle-kit config
+- `apps/web`: Next.js 16 + Tailwind 4 app shell (sidebar, mobile nav, skip link, landmarks),
+  Dashboard/Projects/Scans/Issues/Reports pages with empty states only (no data shown), Settings page
+  with live system status, loading/error/404 states, security headers,
+  `/api/v1/health`, `/api/v1/health/ready`, problem+json 404 for unknown API routes,
+  API handler wrapper (request IDs, access logging, error mapping)
+- `apps/worker`: config validation at startup (fails fast), periodic DB check, loopback `/health`
+  endpoint, graceful shutdown
+- Scripts: `setup:env` (generates secrets), `db:bootstrap` (role + databases via psql, password
+  passed by environment variable, not argv), `db:check`, `db:migrate`
 
-## Files changed
-- `docs/ARCHITECTURE.md`, `PROJECT_STATUS.md`, `IMPLEMENTATION_NOTES.md`, `CHANGELOG.md` (created)
+## Tests completed (2026-10-03)
+- `npm run typecheck`: pass (4 workspaces)
+- `npm run lint`: pass (114 rules on web files incl. 28 Next/a11y)
+- `prettier --check`: pass
+- `vitest`: 37 passed, 1 skipped (live DB test; needs `TEST_DATABASE_URL` DB to exist)
+- `next build`: pass
+- Runtime: `/api/v1/health` 200; `/api/v1/health/ready` 503 with `DB_AUTH_FAILED` (expected
+  until bootstrap); worker `/health` 503 degraded (same reason); all pages 200; unknown page 404;
+  unknown API route 404 problem+json; security headers present; storage path hidden in production
+- UI checked in browser at desktop and mobile (375px) widths; mobile menu opens and closes
 
-## Features implemented
-- None (Phase 0 is design only, per instructions).
+## Known issues
+- App database not yet created (user action: `npm run db:bootstrap`).
+- No authentication yet (Phase 2): Settings page is publicly reachable on the local server.
+- `npm audit`: 0 vulnerabilities in production dependencies; 9 in dev-only tooling (esbuild via
+  drizzle-kit's `@esbuild-kit`, braces). Revisit when drizzle-kit updates.
+- ESLint pinned to 9.x (now end-of-life upstream) because `eslint-plugin-react` (used by
+  eslint-config-next) does not yet declare ESLint 10 support.
+- Docker not installed on this machine (affects Phase 10 verification).
 
-## Tests completed
-- Environment inspection only: Node 22.16, npm 10.9, Git 2.50, PostgreSQL 18.6 (`pg_isready`: accepting connections). Docker not installed. Redis not installed.
-
-## Known issues / blockers
-- Workspace is a temporary scratch folder → must move to a permanent folder before Phase 1.
-- Docker not installed → Docker deliverables unverifiable locally until installed.
-- PostgreSQL role/database for the app not yet created (needs user action).
+## Files changed in Phase 1
+Root: `package.json`, `package-lock.json`, `tsconfig.base.json`, `eslint.config.mjs`,
+`vitest.config.ts`, `.prettierrc.json`, `.prettierignore`, `.gitattributes`, `.gitignore`,
+`.env.example`, `README.md`, `.claude/launch.json`
+`packages/core/**`, `packages/db/**`, `apps/web/**`, `apps/worker/**`, `scripts/**`
 
 ## Next phase
-Phase 1 — Project foundation (monorepo, Next.js shell, worker skeleton, env config, logging, error model, DB connection, health checks). Starts only after "APPROVED — CONTINUE".
+Phase 2: Database schema + migrations (all entities), Better Auth (sign up / log in / log out,
+protected routes), project CRUD, project settings. Starts only after approval.
 
 ## Required environment variables
-See `docs/ARCHITECTURE.md` §15. `.env.example` is created in Phase 1.
+`DATABASE_URL` (required). `BETTER_AUTH_SECRET` and `ENCRYPTION_KEY` (required in production;
+generated by `setup:env`). Everything else is optional with defaults; see `.env.example`.

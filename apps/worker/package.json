@@ -1,0 +1,15 @@
+{
+  "name": "@qa/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@qa/core": "0.1.0",
+    "@qa/db": "0.1.0"
+  }
+}
