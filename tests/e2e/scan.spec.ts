@@ -41,6 +41,7 @@ test("start a QA scan from the UI and watch it complete with live status", async
   await start.click();
 
   await page.waitForURL(new RegExp(`/projects/${projectId}/scans/[0-9a-f-]{36}$`));
+  const scanPath = new URL(page.url()).pathname;
   await expect(page.getByRole("heading", { name: /Scan #1/ })).toBeVisible();
 
   // Live status reflects the worker; wait for the final state.
@@ -63,8 +64,14 @@ test("start a QA scan from the UI and watch it complete with live status", async
   ]) {
     await expect(progress.locator("li", { hasText: step }).first()).toContainText("Completed");
   }
-  await expect(progress.locator("li", { hasText: "AI analysis" })).toContainText("Skipped");
-  await expect(progress.locator("li", { hasText: "AI analysis" })).toContainText("Phase 7");
+  // No AI provider in the e2e environment: AI is skipped with the reason and issues are still
+  // created from the findings by the evidence validation step.
+  const aiRow = progress.locator("li", { hasText: "AI analysis" });
+  await expect(aiRow).toContainText("Skipped");
+  await expect(aiRow).toContainText("No AI provider configured");
+  const groundingRow = progress.locator("li", { hasText: "Evidence validation" });
+  await expect(groundingRow).toContainText("Completed");
+  await expect(groundingRow).toContainText(/\d+ issues from \d+ findings/);
   await expect(page.getByText("Could not determine", { exact: true })).toBeVisible();
 
   // Screenshots are served through the authenticated artifact endpoint and actually load.
@@ -103,6 +110,43 @@ test("start a QA scan from the UI and watch it complete with live status", async
   await page.getByRole("button", { name: "Apply" }).click();
   await page.waitForURL(/scanner=security/);
   await expect(page.locator("details summary").first()).toContainText("SEC-");
+
+  // Issues of the scan: findings grouped by rule, scanner wording, source findings linked.
+  await page.goto(`${scanPath}/issues`);
+  await expect(page.getByRole("heading", { name: /Issues · Scan #1/ })).toBeVisible();
+  const httpIssue = page.locator("li[id^=issue-]", { hasText: "Site is not served over HTTPS" });
+  await httpIssue.locator("summary").click();
+  await expect(httpIssue.getByText("Scanner wording")).toBeVisible();
+  await expect(httpIssue.getByRole("heading", { name: "How to fix" })).toBeVisible();
+  await expect(httpIssue.getByText(/redirect every http:\/\/ request to https:\/\//)).toBeVisible();
+  await expect(httpIssue.getByText("No AI text was produced for this issue.")).toBeVisible();
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    const issuesA11y = await new AxeBuilder({ page })
+      .withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"])
+      .analyze();
+    expect(issuesA11y.violations.map((v) => `${v.id} (${v.impact})`)).toEqual([]);
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      ),
+    ).toBeLessThanOrEqual(0);
+  }
+  await page.setViewportSize({ width: 1440, height: 900 });
+  // Source finding → findings view (traceability both ways).
+  await httpIssue
+    .getByRole("link", { name: /^SEC-\d{3}$/ })
+    .first()
+    .click();
+  await page.waitForURL(/\/findings\?scanner=security#SEC-\d{3}$/);
+  const linked = page.locator("li", { hasText: "Site is not served over HTTPS" }).first();
+  await linked.locator("summary").click();
+  await expect(linked.getByRole("link", { name: /^ISSUE-\d+$/ })).toBeVisible();
+
+  // The project's Issues tab lists the tracked issues and links to the issue detail page.
+  await page.goto(`/projects/${projectId}/issues`);
+  await page.getByRole("link", { name: "Site is not served over HTTPS" }).click();
+  await page.waitForURL(new RegExp(`/projects/${projectId}/issues/\\d+$`));
 
   // Pages tab lists the crawled pages (6 = the configured page limit) with HTTP status.
   await page.goto(`/projects/${projectId}/pages`);

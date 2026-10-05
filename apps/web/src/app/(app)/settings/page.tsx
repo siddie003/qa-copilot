@@ -120,8 +120,8 @@ export default async function SettingsPage() {
             <>
               <Row label="AI provider">
                 {summary.aiConfigured
-                  ? `${summary.aiProvider} · ${summary.aiModel}`
-                  : "Not configured (scanner findings are still produced)"}
+                  ? `${summary.aiProvider} · ${summary.aiModel}${summary.aiEffort ? ` · effort ${summary.aiEffort}` : ""}${summary.aiRefusalFallback ? " · refusal fallback on" : ""}`
+                  : "Not configured (issues use the scanners' wording)"}
               </Row>
               <Row label="Figma API">
                 {summary.figmaConfigured

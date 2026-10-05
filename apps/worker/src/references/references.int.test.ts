@@ -4,6 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { AIProviderError, type AIProvider, type StructuredRequest } from "@qa/ai";
 import { createLogger, defaultScanDefaults, designSpecSchema, parseConfig } from "@qa/core";
 import {
   closeDb,
@@ -284,6 +285,131 @@ describe.skipIf(!hasTestDb)("reference processing (worker)", () => {
     expect(draft.typography.h1).toMatchObject({ fontFamily: "Georgia", fontSize: 48 });
     expect(await designSpecsRepo.discardDraft(getDb(), project.id)).toBe(true);
     expect((await designSpecsRepo.getDesignSpecState(getDb(), project.id)).active!.version).toBe(1);
+  });
+
+  it("adds AI-read guideline values only when the cited line contains them", async () => {
+    const project = await newProject();
+    const bytes = Buffer.from(
+      "Brand guide\n\nPrimary Blue - #1A56DB\n\nOur body copy is set in Inter Regular at 16px.\n\nAccent orange is used sparingly.\n",
+    );
+    const key = `projects/${project.id}/guidelines/${randomUUID()}.txt`;
+    await storage.put(key, bytes);
+    const ref = await referencesRepo.addGuidelineReference(getDb(), project.id, {
+      storageKey: key,
+      meta: { filename: "prose.txt", sizeBytes: bytes.length },
+    });
+    const none = {
+      fontFamily: null,
+      fontSize: null,
+      fontSizeUnit: null,
+      fontWeight: null,
+      lineHeight: null,
+      lineHeightUnit: null,
+      color: null,
+    };
+    const requests: string[] = [];
+    const ai: AIProvider = {
+      id: "anthropic",
+      model: "claude-test",
+      label: "Scripted",
+      async generateStructured<T>(req: StructuredRequest<T>) {
+        requests.push(req.input);
+        const lineOf = (needle: string) =>
+          [...req.input.matchAll(/"id":"(L\d+)","text":"([^"]*)"/g)].find((m) =>
+            m[2]!.includes(needle),
+          )![1]!;
+        const data = {
+          colors: [
+            // Already read literally: the literal value wins.
+            { lineId: lineOf("Primary Blue"), name: "Primary Blue", value: "#1a56db", role: null },
+          ],
+          typography: [
+            // Prose the literal extractor cannot read; every value is in the cited line.
+            {
+              ...none,
+              lineId: lineOf("body copy"),
+              role: "body",
+              fontFamily: "Inter",
+              fontSize: 16,
+              fontSizeUnit: "px",
+              fontWeight: 400,
+            },
+          ],
+          buttons: [
+            // Fabricated: the cited line has no button and no color code.
+            {
+              lineId: lineOf("body copy"),
+              variant: "primary",
+              background: "#ff7a00",
+              color: null,
+              borderRadius: null,
+            },
+          ],
+        };
+        return {
+          data: req.schema.parse(data),
+          usage: { inputTokens: 300, outputTokens: 80, cacheReadTokens: 0 },
+          model: "claude-test",
+          latencyMs: 3,
+          stopReason: "end_turn",
+          fallbackUsed: false,
+        };
+      },
+    };
+    while (await processNextReferenceJob({ ...rt, ai })) {
+      // drain with the scripted provider
+    }
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).not.toContain("Accent orange"); // lines without design values are not sent
+    const row = await referencesRepo.getReference(getDb(), project.id, ref.id);
+    expect(row!.meta).toMatchObject({
+      // Two values verified (Primary Blue, body); only body is new, the literal color wins.
+      ai: {
+        provider: "anthropic",
+        model: "claude-test",
+        status: "completed",
+        accepted: 2,
+        rejected: 1,
+      },
+      extracted: expect.arrayContaining([expect.stringMatching(/^AI-assisted: body, line 5$/)]),
+      skipped: expect.arrayContaining([
+        "AI value not used: primary button: not named in the cited line",
+      ]),
+    });
+    const draft = designSpecsRepo.specOf(
+      (await designSpecsRepo.getDesignSpecState(getDb(), project.id)).draft!,
+    );
+    expect(draft.typography.body).toMatchObject({
+      fontFamily: "Inter",
+      fontSize: 16,
+      fontWeight: 400,
+      source: {
+        type: "document",
+        line: 5,
+        method: "ai",
+        excerpt: "Our body copy is set in Inter Regular at 16px.",
+      },
+    });
+    expect(draft.colors["Primary Blue"]!.source.method).toBeUndefined();
+    expect(draft.components.buttonPrimary).toBeUndefined();
+
+    // A failing provider never blocks the literal extraction.
+    await referencesRepo.requeueReference(getDb(), project.id, ref.id);
+    const failing: AIProvider = {
+      ...ai,
+      async generateStructured() {
+        throw new AIProviderError("rate_limit", "The Anthropic API rate limit was exceeded");
+      },
+    };
+    while (await processNextReferenceJob({ ...rt, ai: failing })) {
+      // drain
+    }
+    const again = await referencesRepo.getReference(getDb(), project.id, ref.id);
+    expect(again).toMatchObject({
+      status: "ready",
+      meta: { ai: { status: "failed", error: "The Anthropic API rate limit was exceeded" } },
+    });
+    expect((again!.meta as { valuesFound: number }).valuesFound).toBeGreaterThan(0);
   });
 
   it("fails documents and references left processing by a stopped worker", async () => {

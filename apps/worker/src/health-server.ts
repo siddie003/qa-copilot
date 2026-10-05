@@ -13,6 +13,7 @@ export interface WorkerStatus {
     | { status: "not_started" };
   /** Processes content documents, Figma references and guideline documents. */
   referenceWorker?: { status: "running" | "not_started" };
+  reportWorker?: { status: "running" | "not_started" };
 }
 
 /**

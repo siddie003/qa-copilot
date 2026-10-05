@@ -28,6 +28,18 @@ const ORIGIN_LABELS: Record<string, string> = {
 const fmtValue = (v: unknown) =>
   v === null || v === undefined ? "—" : Array.isArray(v) ? v.join(", ") : String(v);
 
+/** Outcome of AI-assisted guideline reading (only present when an AI provider is configured). */
+function aiSummary(ai: unknown): string | null {
+  if (!ai || typeof ai !== "object") return null;
+  const a = ai as Record<string, unknown>;
+  if (a.status === "completed")
+    return `AI-assisted reading (${String(a.model)}): ${Number(a.accepted ?? 0)} value(s) verified against the lines they cite; ${Number(a.rejected ?? 0)} discarded. Literally written values take precedence.`;
+  if (a.status === "failed")
+    return `AI-assisted reading failed: ${String(a.error)} Only literally written values were read.`;
+  if (a.status === "skipped") return `AI-assisted reading skipped: ${String(a.reason)}.`;
+  return null;
+}
+
 function List({ title, items }: { title: string; items: unknown }) {
   if (!Array.isArray(items) || !items.length) return null;
   return (
@@ -288,6 +300,9 @@ export function DesignReferencePanel({
                       {s.fetchedAt ? ` · ${formatDateTime(s.fetchedAt)}` : ""}
                       {typeof meta.note === "string" ? ` · ${meta.note}` : ""}
                     </p>
+                  )}
+                  {s.status === "ready" && aiSummary(meta.ai) && (
+                    <p className="text-xs text-muted">{aiSummary(meta.ai)}</p>
                   )}
                   <List title="Values read" items={meta.extracted} />
                   <List title="Not used" items={meta.skipped} />

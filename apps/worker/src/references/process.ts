@@ -1,3 +1,12 @@
+import {
+  AIProviderError,
+  createAIProvider,
+  extractGuidelineWithAi,
+  GUIDELINE_PROMPT_VERSION,
+  mergeAssistedSpec,
+  type AIProvider,
+  type AssistedExtraction,
+} from "@qa/ai";
 import { countSpecValues, errorFields, type AppConfig, type Logger } from "@qa/core";
 import { contentRepo, designSpecsRepo, referencesRepo, secretsRepo, type Database } from "@qa/db";
 import {
@@ -19,9 +28,70 @@ export interface ReferenceRuntime {
   /** Figma API base URL (tests point it at a local mock). */
   figmaBaseUrl?: string;
   fetchImpl?: typeof fetch;
+  /** AI provider for assisted guideline extraction; defaults to the configured one. */
+  ai?: AIProvider;
 }
 
 const EXTRACTION_TIMEOUT_MS = 60_000;
+/** Upper bound for the AI-assisted part of a guideline extraction. */
+const AI_GUIDELINE_TIMEOUT_MS = 180_000;
+
+type Blocks = Awaited<ReturnType<typeof extractContentBlocks>>["blocks"];
+
+/**
+ * AI-assisted reading of a guideline document (only with a configured provider). Failures are
+ * reported in the reference's details; the literal extraction is used either way.
+ */
+async function assistGuideline(
+  rt: ReferenceRuntime,
+  blocks: Blocks,
+  doc: { referenceId: string; filename: string },
+  log: Logger,
+): Promise<{ result: AssistedExtraction | null; meta: Record<string, unknown> } | null> {
+  const provider = rt.ai ?? createAIProvider(rt.config);
+  if (provider.id === "none") return null;
+  const base = {
+    provider: provider.id,
+    model: provider.model,
+    promptVersion: GUIDELINE_PROMPT_VERSION,
+  };
+  try {
+    const result = await extractGuidelineWithAi(
+      provider,
+      blocks.map((b) => ({
+        index: b.location.index,
+        text: b.text,
+        page: b.location.page,
+        line: b.location.line,
+      })),
+      doc,
+      AbortSignal.timeout(AI_GUIDELINE_TIMEOUT_MS),
+    );
+    if (!result)
+      return {
+        result: null,
+        meta: { ...base, status: "skipped", reason: "No line mentions design values" },
+      };
+    return {
+      result,
+      meta: {
+        ...base,
+        model: result.model,
+        status: "completed",
+        linesSent: result.linesSent,
+        accepted: result.accepted.length,
+        rejected: result.rejected.length,
+        inputTokens: result.usage.inputTokens,
+        outputTokens: result.usage.outputTokens,
+      },
+    };
+  } catch (err) {
+    const error =
+      err instanceof AIProviderError ? err.message : `Unexpected error: ${(err as Error).message}`;
+    log.warn({ error }, "AI-assisted guideline extraction failed; literal values are used");
+    return { result: null, meta: { ...base, status: "failed", error } };
+  }
+}
 
 type ContentDocument = NonNullable<Awaited<ReturnType<typeof contentRepo.claimNextDocument>>>;
 type ReferenceSource = NonNullable<Awaited<ReturnType<typeof referencesRepo.claimNextReference>>>;
@@ -153,10 +223,27 @@ export async function processReference(rt: ReferenceRuntime, ref: ReferenceSourc
     if (ref.kind === "guideline_document") {
       const filename = String(previous.filename ?? "guideline");
       const result = await readValidated(rt, ref.storageKey!, filename);
-      const { spec, report } = extractGuidelineDraft(result.blocks, {
-        referenceId: ref.id,
-        filename,
-      });
+      const doc = { referenceId: ref.id, filename };
+      const literal = extractGuidelineDraft(result.blocks, doc);
+      // AI-read values only fill what the literal extraction did not find, each verified
+      // against the line it cites.
+      const assisted = await assistGuideline(rt, result.blocks, doc, log);
+      const merged = assisted?.result
+        ? mergeAssistedSpec(literal.spec, assisted.result.spec)
+        : { spec: literal.spec, added: new Set<string>() };
+      const spec = merged.spec;
+      const report = {
+        extracted: [
+          ...literal.report.extracted,
+          ...(assisted?.result?.accepted ?? [])
+            .filter((a) => merged.added.has(a.key))
+            .map((a) => `AI-assisted: ${a.text}`),
+        ],
+        skipped: [
+          ...literal.report.skipped,
+          ...(assisted?.result?.rejected ?? []).map((r) => `AI value not used: ${r}`),
+        ],
+      };
       const values = countSpecValues(spec);
       const draft = values
         ? await designSpecsRepo.upsertDraftFromExtraction(rt.db, ref.projectId, spec, {
@@ -173,6 +260,7 @@ export async function processReference(rt: ReferenceRuntime, ref: ReferenceSourc
           extracted: report.extracted.slice(0, 100),
           skipped: report.skipped.slice(0, 100),
           draftVersion: draft?.version ?? null,
+          ai: assisted?.meta ?? null,
           note: values
             ? draft
               ? null

@@ -1,47 +1,66 @@
-import { ISSUE_STATUSES, SEVERITIES } from "@qa/core";
-import { getDb, issuesRepo, type IssueSort } from "@qa/db";
+import { FINDING_SOURCE_LABELS, ISSUE_STATUSES, SEVERITIES } from "@qa/core";
+import { getDb, issuesRepo } from "@qa/db";
 import { ListChecks } from "lucide-react";
 import Link from "next/link";
-import { z } from "zod";
-import {
-  ISSUE_STATUS_LABELS,
-  IssueStatusBadge,
-  SEVERITY_LABELS,
-  SeverityBadge,
-} from "@/components/ui/badges";
+import { ISSUE_STATUS_LABELS, SEVERITY_LABELS } from "@/components/ui/badges";
 import { buttonClasses } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { inputClasses } from "@/components/ui/field-styles";
 import { Pagination } from "@/components/ui/pagination";
-import { formatDateTime } from "@/lib/format";
+import {
+  DETECTED_SINCE_LABELS,
+  hasActiveFilters,
+  parseIssueFilters,
+  SORT_LABELS,
+  VERDICT_FILTER_LABELS,
+  type RawParams,
+} from "@/lib/issue-filters";
+import { ISSUE_PAGE_SIZE, listIssues } from "@/server/issues";
+import { IssueTable } from "./issue-table";
 
-type RawParams = Record<string, string | string[] | undefined>;
+const CONFIDENCE_OPTIONS = [
+  ["", "Any confidence"],
+  ["50", "50% or more"],
+  ["70", "70% or more"],
+  ["90", "90% or more"],
+] as const;
 
-const list = <T extends string>(values: readonly [T, ...T[]]) =>
-  z.preprocess(
-    (v) => (v === undefined ? [] : Array.isArray(v) ? v : [v]),
-    z.array(z.enum(values)).catch([]),
+function Checkboxes({
+  legend,
+  name,
+  options,
+  selected,
+}: {
+  legend: string;
+  name: string;
+  options: Array<[string, string]>;
+  selected: readonly string[];
+}) {
+  return (
+    <fieldset className="min-w-0">
+      <legend className="mb-1 text-xs font-medium text-muted">{legend}</legend>
+      <div className="flex flex-wrap gap-x-4 gap-y-1">
+        {options.map(([value, label]) => (
+          <label key={value} className="flex items-center gap-1.5 text-sm">
+            <input
+              type="checkbox"
+              name={name}
+              value={value}
+              defaultChecked={selected.includes(value)}
+              className="size-4 accent-[var(--primary)]"
+            />
+            {label}
+          </label>
+        ))}
+      </div>
+    </fieldset>
   );
+}
 
-const filterSchema = z.object({
-  severity: list(SEVERITIES),
-  status: list(ISSUE_STATUSES),
-  category: z.string().trim().max(64).optional().catch(undefined),
-  q: z.string().trim().max(200).optional().catch(undefined),
-  sort: z.enum(["severity", "status", "category", "date"]).catch("severity").default("severity"),
-  page: z.coerce.number().int().min(1).max(10_000).catch(1).default(1),
-});
-
-const SORT_LABELS: Record<IssueSort, string> = {
-  severity: "Severity",
-  status: "Status",
-  category: "Category",
-  date: "Last updated",
-};
-
-const PAGE_SIZE = 25;
-
-/** Filterable issue table backed by `issue_track` (server component; filters via query string). */
+/**
+ * Issue explorer backed by `issue_track` (server component; filters via the query string),
+ * with a selectable table for bulk status changes.
+ */
 export async function IssueList({
   userId,
   projectId,
@@ -55,21 +74,12 @@ export async function IssueList({
   basePath: string;
   showProject: boolean;
 }) {
-  const f = filterSchema.parse(params);
+  const f = parseIssueFilters(params);
   const [{ items, total }, categories] = await Promise.all([
-    issuesRepo.listIssues(getDb(), userId, {
-      projectId,
-      severities: f.severity,
-      statuses: f.status,
-      category: f.category || undefined,
-      q: f.q || undefined,
-      sort: f.sort,
-      page: f.page,
-      pageSize: PAGE_SIZE,
-    }),
+    listIssues(userId, f, { projectId }),
     issuesRepo.listIssueCategories(getDb(), userId, projectId),
   ]);
-  const filtered = Boolean(f.severity.length || f.status.length || f.category || f.q);
+  const filtered = hasActiveFilters(f);
 
   if (total === 0 && !filtered) {
     return (
@@ -85,6 +95,7 @@ export async function IssueList({
     <>
       <form
         role="search"
+        aria-label="Filter issues"
         action={basePath}
         className="mb-4 rounded-lg border border-border bg-surface p-4"
       >
@@ -104,7 +115,7 @@ export async function IssueList({
           </div>
           <div>
             <label htmlFor="issue-category" className="mb-1 block text-xs font-medium text-muted">
-              Category
+              Scanner / category
             </label>
             <select
               id="issue-category"
@@ -115,7 +126,7 @@ export async function IssueList({
               <option value="">All categories</option>
               {categories.map((c) => (
                 <option key={c} value={c}>
-                  {c}
+                  {FINDING_SOURCE_LABELS[c] ?? c}
                 </option>
               ))}
             </select>
@@ -132,42 +143,74 @@ export async function IssueList({
               ))}
             </select>
           </div>
+          <div className="sm:col-span-2">
+            <label htmlFor="issue-url" className="mb-1 block text-xs font-medium text-muted">
+              Page URL contains
+            </label>
+            <input
+              id="issue-url"
+              name="url"
+              type="search"
+              defaultValue={f.url ?? ""}
+              placeholder="/pricing"
+              className={inputClasses}
+            />
+          </div>
+          <div>
+            <label htmlFor="issue-confidence" className="mb-1 block text-xs font-medium text-muted">
+              Confidence
+            </label>
+            <select
+              id="issue-confidence"
+              name="minConfidence"
+              defaultValue={f.minConfidence !== undefined ? String(f.minConfidence) : ""}
+              className={inputClasses}
+            >
+              {CONFIDENCE_OPTIONS.map(([v, l]) => (
+                <option key={v} value={v}>
+                  {l}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label htmlFor="issue-since" className="mb-1 block text-xs font-medium text-muted">
+              Last detected
+            </label>
+            <select
+              id="issue-since"
+              name="since"
+              defaultValue={f.since ?? ""}
+              className={inputClasses}
+            >
+              <option value="">Any time</option>
+              {Object.entries(DETECTED_SINCE_LABELS).map(([v, l]) => (
+                <option key={v} value={v}>
+                  {l}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
-        <div className="mt-3 grid gap-3 lg:grid-cols-2">
-          <fieldset>
-            <legend className="mb-1 text-xs font-medium text-muted">Severity</legend>
-            <div className="flex flex-wrap gap-x-4 gap-y-1">
-              {SEVERITIES.map((s) => (
-                <label key={s} className="flex items-center gap-1.5 text-sm">
-                  <input
-                    type="checkbox"
-                    name="severity"
-                    value={s}
-                    defaultChecked={f.severity.includes(s)}
-                    className="size-4 accent-[var(--primary)]"
-                  />
-                  {SEVERITY_LABELS[s]}
-                </label>
-              ))}
-            </div>
-          </fieldset>
-          <fieldset>
-            <legend className="mb-1 text-xs font-medium text-muted">Status</legend>
-            <div className="flex flex-wrap gap-x-4 gap-y-1">
-              {ISSUE_STATUSES.map((s) => (
-                <label key={s} className="flex items-center gap-1.5 text-sm">
-                  <input
-                    type="checkbox"
-                    name="status"
-                    value={s}
-                    defaultChecked={f.status.includes(s)}
-                    className="size-4 accent-[var(--primary)]"
-                  />
-                  {ISSUE_STATUS_LABELS[s]}
-                </label>
-              ))}
-            </div>
-          </fieldset>
+        <div className="mt-3 grid gap-3 lg:grid-cols-3">
+          <Checkboxes
+            legend="Severity"
+            name="severity"
+            options={SEVERITIES.map((s) => [s, SEVERITY_LABELS[s]!])}
+            selected={f.severity}
+          />
+          <Checkboxes
+            legend="Status"
+            name="status"
+            options={ISSUE_STATUSES.map((s) => [s, ISSUE_STATUS_LABELS[s]!])}
+            selected={f.status}
+          />
+          <Checkboxes
+            legend="Verdict"
+            name="verdict"
+            options={Object.entries(VERDICT_FILTER_LABELS)}
+            selected={f.verdict}
+          />
         </div>
         <div className="mt-3 flex gap-2">
           <button type="submit" className={buttonClasses("primary", "sm")}>
@@ -186,69 +229,11 @@ export async function IssueList({
           No issues match these filters.
         </p>
       ) : (
-        <div
-          role="region"
-          aria-label="Issues table"
-          tabIndex={0}
-          className="overflow-x-auto rounded-lg border border-border bg-surface"
-        >
-          <table className="w-full min-w-[720px] text-left text-sm">
-            <caption className="sr-only">Issues, {total} matching</caption>
-            <thead className="border-b border-border bg-surface-muted text-xs uppercase tracking-wide text-muted">
-              <tr>
-                <th scope="col" className="px-4 py-3 font-medium">
-                  Issue
-                </th>
-                {showProject && (
-                  <th scope="col" className="px-4 py-3 font-medium">
-                    Project
-                  </th>
-                )}
-                <th scope="col" className="px-4 py-3 font-medium">
-                  Severity
-                </th>
-                <th scope="col" className="px-4 py-3 font-medium">
-                  Category
-                </th>
-                <th scope="col" className="px-4 py-3 font-medium">
-                  Status
-                </th>
-                <th scope="col" className="px-4 py-3 font-medium">
-                  Updated
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border">
-              {items.map((i) => (
-                <tr key={i.id}>
-                  <td className="px-4 py-3">
-                    <div className="font-mono text-xs text-subtle">ISSUE-{i.displayNo}</div>
-                    <div className="font-medium">{i.title}</div>
-                  </td>
-                  {showProject && (
-                    <td className="px-4 py-3">
-                      <Link href={`/projects/${i.projectId}/issues`} className="hover:underline">
-                        {i.projectName}
-                      </Link>
-                    </td>
-                  )}
-                  <td className="px-4 py-3">
-                    <SeverityBadge severity={i.severity} />
-                  </td>
-                  <td className="px-4 py-3 text-muted">{i.category}</td>
-                  <td className="px-4 py-3">
-                    <IssueStatusBadge status={i.status} />
-                  </td>
-                  <td className="px-4 py-3 text-muted">{formatDateTime(i.updatedAt)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <IssueTable items={items} total={total} showProject={showProject} />
       )}
       <Pagination
         page={f.page}
-        pageSize={PAGE_SIZE}
+        pageSize={ISSUE_PAGE_SIZE}
         total={total}
         basePath={basePath}
         params={params}

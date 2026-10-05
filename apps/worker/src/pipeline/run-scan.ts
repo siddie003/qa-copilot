@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { createAIProvider, type AIProvider } from "@qa/ai";
 import {
   authHeadersFor,
   COMPARISON_KEYS,
@@ -44,6 +45,7 @@ import {
   type TargetPolicy,
 } from "@qa/security";
 import type { Storage } from "@qa/storage";
+import { aiStep, groundingStep, type IssueStepEnv, type IssueStepState } from "./issue-steps";
 import { buildScannerContext, runScannerStep, type ScannerEnv } from "./scanner-steps";
 
 export interface ScanRuntime {
@@ -54,10 +56,12 @@ export interface ScanRuntime {
   /** Injected in tests to control DNS; defaults to the system resolver. */
   resolve?: Resolver;
   heartbeatMs?: number;
+  /** AI provider; defaults to the one configured by AI_PROVIDER (tests inject fakes). */
+  ai?: AIProvider;
 }
 
 type StepOutcome = {
-  status: "completed" | "failed" | "inconclusive";
+  status: "completed" | "failed" | "inconclusive" | "skipped";
   statusReason?: string;
   error?: string;
   findingCount?: number;
@@ -91,6 +95,8 @@ interface ScanState {
   startFinalUrl: string | null;
   browser: BrowserSession | null;
   references: ScanReferences;
+  /** Issue groups and AI results passed from the ai step to the grounding step. */
+  issues: IssueStepState;
 }
 
 /** Executes one claimed scan end to end. Never throws: all failures are recorded on the scan. */
@@ -123,6 +129,7 @@ export async function runScan(
     startFinalUrl: null,
     browser: null,
     references: { designSpec: null, content: null },
+    issues: { runIds: new Map() },
     fetchOpts: {
       policy,
       dispatcher,
@@ -247,6 +254,11 @@ export async function runScan(
           return runScannerStep(env, COMPARISON_SCANNERS[key], ctx);
         });
       }
+      // Issues: AI interpretation (when configured), then grounding and issue creation, which
+      // always runs so every finding ends up in an issue even if the AI step fails.
+      const issues = issueEnv(rt, state);
+      if (planned.has("ai")) await runStep("ai", () => aiStep(issues));
+      if (planned.has("grounding")) await runStep("grounding", () => groundingStep(issues));
     }
   } finally {
     clearInterval(beat);
@@ -447,6 +459,19 @@ function scannerEnv(rt: ScanRuntime, s: ScanState): ScannerEnv {
     pageTimeoutMs: s.snapshot.pageTimeoutMs,
     references: s.references,
     openContext: (viewport) => openContext(rt, s, viewport),
+  };
+}
+
+function issueEnv(rt: ScanRuntime, s: ScanState): IssueStepEnv {
+  return {
+    db: rt.db,
+    log: rt.log.child({ scanId: s.scanId }),
+    config: rt.config,
+    scanId: s.scanId,
+    provider: rt.ai ?? createAIProvider(rt.config),
+    signal: s.abort.signal,
+    designSpec: s.references.designSpec?.spec ?? null,
+    state: s.issues,
   };
 }
 

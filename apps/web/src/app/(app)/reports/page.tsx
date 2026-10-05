@@ -32,8 +32,7 @@ export default async function ReportsPage({
         <EmptyState
           icon={FileText}
           title="No reports yet"
-          description="Reports are generated from a completed scan. None have been generated."
-          note="Report generation and export: Phase 8."
+          description="Reports (PDF, Markdown, JSON) are generated from a finished scan on the project's Reports tab. None have been generated yet."
         />
       ) : (
         <>

@@ -4,7 +4,7 @@ AI-powered website QA, design and brand compliance platform. You provide a desig
 (Figma or brand guidelines), approved content and a website URL; QA Copilot crawls the site,
 runs evidence-based QA scanners, and turns the findings into developer-ready issues and reports.
 
-> **Status:** Phase 6 (design and content references + comparison). AI analysis follows in Phase 7. See [PROJECT_STATUS.md](PROJECT_STATUS.md) and
+> **Status:** Phase 8 (issue management + reporting). Scan history and comparison follow in Phase 9. See [PROJECT_STATUS.md](PROJECT_STATUS.md) and
 > [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). A full README (Docker, deployment, scanners, AI
 > configuration) is completed in Phase 10.
 
@@ -80,8 +80,65 @@ After the scanners, two reference comparisons run when the project has reference
 Every finding carries evidence (HTML snippet, headers, measurements, screenshots, computed styles,
 word diffs with document citations). Checks that cannot be verified are listed as such, never
 reported as passes or problems. Findings are shown on the scan page and its findings view; every
-compared reference value (matches included) is listed on the scan's **comparison** page. AI
-grouping and reports are shown as "skipped" with the phase that implements them.
+compared reference value (matches included) is listed on the scan's **comparison** page. Then the
+findings become issues (next section), which you can work on and export as reports.
+
+## Issues and AI analysis
+
+After the scanners, two more steps turn findings into developer-ready issues:
+
+1. **AI analysis** (only when an AI provider is configured): the findings are grouped
+   deterministically — one issue per scanner rule (e.g. "Meta description is missing (4 pages)"),
+   one per design value or approved text block — and the provider writes a title, description,
+   severity rationale, fix steps and cited statements for each group, in batches per category.
+2. **Evidence validation** (always): a deterministic grounding validator checks the AI text against
+   the evidence. AI text that cites findings that do not exist or belong to another issue is
+   rejected; any field containing a number, color, URL, page path, quote or finding id that is not
+   in the issue's evidence is replaced with the scanner's own wording; severity may move at most
+   one level (never up for unconfirmed findings); affected pages, category and the findings of an
+   issue never come from AI. Every check is stored and shown with the issue.
+
+Without a provider (`AI_PROVIDER=none`) or when a request fails, issues use the scanners' wording
+and the rule catalog's fix guidance — nothing is lost, and raw findings are never changed. Each
+finding belongs to exactly one issue; issues keep a stable `ISSUE-n` number across scans. The
+scan's **Issues** page shows every issue with its source findings, how its text was produced
+("AI text, evidence-checked", "AI text, parts replaced", "AI text rejected", "Scanner wording"),
+each grounding check and the AI requests made (tokens, model; prompts are not stored).
+
+AI configuration (see `.env.example`): `AI_PROVIDER=anthropic` with `ANTHROPIC_API_KEY` and
+`AI_MODEL` (recommended `claude-opus-5-5`), optional `AI_EFFORT`; refusals by Anthropic's safety
+classifiers are retried on the recommended fallback model (`AI_REFUSAL_FALLBACK=true`). Or
+`AI_PROVIDER=openai-compatible` with `OPENAI_API_KEY`, `AI_MODEL` and optional `OPENAI_BASE_URL`
+for any Chat Completions server that supports JSON-schema output. `AI_CONCURRENCY`,
+`AI_TIMEOUT_MS` and `AI_MAX_OUTPUT_TOKENS` tune requests. The AI receives finding data only (never
+credentials); website content is passed as escaped data that it is told not to follow.
+
+## Working on issues
+
+The **Issues** page (all projects) and each project's **Issues** tab list tracked issues with
+filters for severity, status, verdict (confirmed, needs review, unable to verify), scanner,
+affected page URL, confidence and when the issue was last detected, plus search by title or
+`ISSUE-n` and sorting. Select issues to change their status in bulk.
+
+Each issue has a detail page (`/projects/:id/issues/:n`) with the description, affected pages,
+expected/actual values, fix guidance, every source finding with its evidence, the grounding checks
+behind its text, every scan it was found in (older occurrences can be opened), and its **status
+history**. Users set *Open*, *In progress*, *Resolved* or *Ignored* (with an optional note);
+*Inconclusive* (evidence cannot confirm the issue) and *Reopened* are set by the system only.
+Every change is recorded with who made it, when, the note and the previous status; detections
+and evidence-based status changes made by scans are recorded as system events with the scan.
+
+## Reports
+
+Reports are generated on demand from a **finished** scan (project **Reports** tab, or the
+**Reports** button on a scan): **PDF** (for sharing), **Markdown** (tickets, pull requests, wikis)
+or **JSON** (versioned schema `qa-copilot-report` v1, including every finding's evidence). The
+worker builds them only from stored records: scan settings, every pipeline step with its result
+(failed, inconclusive and skipped steps with their reasons), checks that could not be verified,
+and every issue with its tracking status at generation time, verdict, fix guidance and source
+findings. Website text is escaped in every format; the PDF is rendered by Chromium with JavaScript
+disabled and all network requests blocked. Files are stored under `reports/` in `STORAGE_DIR` and
+downloaded through an owner-checked endpoint.
 
 ## Design references and approved content
 
@@ -94,6 +151,11 @@ Open a project's **References** tab (or use the setup wizard):
 - **Brand guideline** (PDF, DOCX, TXT, Markdown): values written literally (e.g.
   “Primary — #1A56DB”, “H1 — Georgia Bold, 48px / 56px”) are extracted with page/line citations.
 - **Manual values / JSON**: the token editor, with JSON import and export.
+
+With an AI provider configured, guideline documents are also read with AI assistance: values
+written in prose ("Our body copy is set in Inter Regular at 16px") are added only if they appear
+in the line they cite, only where the literal reading found nothing, and are marked "read with AI
+assistance" in their citation.
 
 Extracted values (Figma, guideline) become a **draft**: review each change with its source, then
 confirm or discard it. Manually entered values are never overwritten by extraction. Scans use the
@@ -157,6 +219,14 @@ All `/api/v1` endpoints except health checks require a session cookie (sign in v
 | GET/PUT/DELETE | `/api/v1/projects/:id/scan-auth` | Site credentials (write-only; GET returns a summary) |
 | POST | `/api/v1/projects/:id/scans` | Start a scan `{ authorizationAttested: true }` |
 | GET | `/api/v1/scans/:id`, `/events` (SSE), `/captures`, `/findings` | Scan status, live events, captures, findings |
+| GET | `/api/v1/scans/:id/issues?grounding=` | Issues of a scan with source findings, grounding checks and AI requests |
+| GET | `/api/v1/issues`, `/api/v1/projects/:id/issues` | Tracked issues; filters `severity`, `status`, `verdict` (confirmed/potential/unverified), `category`, `url`, `minConfidence` (0–100), `since` (1d/7d/30d/90d), `q`, `sort`, `page`, `pageSize`, `projectId` |
+| GET | `/api/v1/issues/:id?scanId=` | Issue detail: occurrences, selected occurrence with findings, evidence and grounding checks, status history |
+| PATCH | `/api/v1/issues/:id/status` | Set the status `{ status: open|in_progress|resolved|ignored, note? }` (audited) |
+| POST | `/api/v1/issues/status` | Bulk status change `{ ids (≤ 100), status, note? }` (all or nothing) |
+| GET/POST | `/api/v1/scans/:id/reports` | List a scan's reports; request one `{ format: pdf|md|json }` (202, finished scans only) |
+| GET/DELETE | `/api/v1/reports/:id` | Report status (`downloadUrl` when ready); delete report and file |
+| GET | `/api/v1/reports/:id/download` | Download a completed report (attachment) |
 | POST | `/api/v1/scans/:id/cancel` | Cancel a queued or running scan |
 | GET | `/api/v1/artifacts/:key` | Screenshot/snapshot (owner only) |
 
@@ -182,7 +252,8 @@ automatically and truncate tables between tests. They refuse to run against a da
 name does not end in `_test`.
 
 End-to-end tests (Playwright): accessibility audits (axe-core, WCAG 2.2 A/AA, desktop and 390px
-mobile) and a full scan from the UI against the fixture site. They start a production web server
+mobile), a full scan from the UI against the fixture site, references and comparison, and the
+issue workflow with report generation and downloads. They start a production web server
 on port 3100, a worker (health port 3191) and the fixture site on 4100 (run `npm run build`
 first; your dev servers are not touched) and remove their throwaway accounts and screenshots:
 
@@ -203,16 +274,19 @@ npm run smoke:phase2 -- verify    # checks data persisted, then cleans up
 
 ```
 apps/web           Next.js UI, auth, /api/v1 route handlers
-apps/worker        Scan worker (claims queued scans, runs the pipeline) and reference worker
-                   (parses documents, reads Figma, extracts guideline drafts)
+apps/worker        Scan worker (claims queued scans, runs the pipeline), reference worker
+                   (parses documents, reads Figma, extracts guideline drafts) and report worker
 packages/core      Config validation, logging, error model, domain schemas
 packages/db        Drizzle schema (24 tables), migrations, repositories, health check
 packages/security  URL validation, DNS/connect-time SSRF guard, safe redirects
 packages/crawler   HTTP fetcher, URL normalization, robots.txt, crawl loop, technology detection
 packages/browser   Playwright capture with an in-browser network guard
-packages/storage   Artifact storage (screenshots, HTML snapshots)
+packages/storage   Artifact storage (screenshots, HTML snapshots, uploads, reports)
+packages/reports   Report data model (JSON schema v1), Markdown and HTML (PDF) renderers
 packages/scanners  The six QA scanners plus design and content comparison
 packages/reference Document extraction (PDF/DOCX/TXT/MD), Figma client + normalizer, guideline extraction
+packages/ai        AI providers (Anthropic, OpenAI-compatible, none), issue grouping, rule catalog,
+                   grounding validator, AI-assisted guideline reading
 fixtures/demo-site Controlled test website (see its README)
 fixtures/documents Design spec + approved content for the fixture; real DOCX/PDF builders
 fixtures/figma     Figma REST response used by tests

@@ -22,6 +22,34 @@ Status: **Draft for approval** · Date: 2026-10-03 · Phase: 0 (no functional co
 ---
 
 > **Amendments during implementation**
+> - Phase 8: **Reports are not a scan step.** They are generated on demand for finished scans
+>   (completed, completed with failures, failed, cancelled): the `report` row is the job (pending →
+>   running → completed/failed, claimed with SKIP LOCKED by a report loop in `apps/worker`, LISTEN
+>   `report_queued`, stale running jobs failed after 5 min). `planScanSteps` no longer plans a
+>   `report` step; old scans' skipped rows were reworded by migration `0005`. `packages/reports`
+>   holds the versioned JSON model (`qa-copilot-report` v1, built purely from DB rows), the
+>   Markdown renderer (website text escaped) and the HTML template; the PDF is rendered by
+>   `@qa/browser` `renderPdf` (JavaScript disabled, every request aborted). Files live under
+>   `reports/<scanId>/<reportId>.<ext>` and are streamed by `GET /reports/:id/download` (not the
+>   artifact route). Status workflow: users set open/in_progress/resolved/ignored;
+>   `reopened`/`inconclusive` are system-only. Every change writes `issue_status_event` (new column
+>   `scan_id` for system events: first detection, evidence-based open↔inconclusive); bulk changes
+>   are all-or-nothing on ownership. The explorer stays server-rendered (query-string filters, no
+>   TanStack); only the selectable table is a client component. Issue pages use the stable number:
+>   `/projects/:id/issues/:displayNo`.
+> - Phase 7: `packages/ai`. **Pre-grouping defines issue identity**: one issue per scanner rule
+>   (design/content: per finding), fingerprinted deterministically; the AI writes text for a group
+>   but cannot merge/split groups (so tracking across scans never depends on AI output), and the AI
+>   output references `groupId` + `sourceFindingIds`. Affected URLs and category are always
+>   computed from the findings (grounding rules 3 and 6 hold by construction). Grounding rule 4's
+>   corpus also includes the issue's counts, its rule-catalog text and WCAG references derived from
+>   axe tags; per-field replacement (`partial`) and claims with cited fields are implemented as
+>   planned. Steps `ai` + `grounding` (the latter always runs and creates the issues). One `ai_run`
+>   per request; `issue` gained `verdict`, `rule_id`, `severity_rationale`, `ai_run_id`;
+>   `issue_finding.raw_finding_id` is unique. Providers: Anthropic via the official SDK (structured
+>   outputs, streaming, server-side refusal fallback for supported models; no temperature),
+>   OpenAI-compatible via fetch, none. AI-assisted guideline extraction (§7) added: values kept only
+>   if written in the cited line, literal values win, still a draft.
 > - Phase 6: `packages/reference` holds document extraction (PDF via unpdf with font-size heading
 >   recovery, DOCX via mammoth, Markdown via mdast, TXT), the Figma REST client/normalizer and the
 >   guideline extractor. Guideline extraction is **deterministic** (only literal values, cited by

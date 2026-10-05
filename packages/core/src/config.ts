@@ -34,9 +34,18 @@ export const configSchema = z
 
     AI_PROVIDER: z.enum(["none", "anthropic", "openai-compatible"]).default("none"),
     AI_MODEL: z.string().optional(),
+    /** Sampling temperature for the OpenAI-compatible provider (current Claude models reject it). */
     AI_TEMPERATURE: z.coerce.number().min(0).max(1).default(0),
-    AI_TIMEOUT_MS: int(1_000, 600_000).default(120_000),
-    AI_MAX_OUTPUT_TOKENS: int(256, 64_000).default(8_000),
+    /** Per request. Thinking models can take minutes for a batch of issues. */
+    AI_TIMEOUT_MS: int(1_000, 600_000).default(300_000),
+    /** Includes thinking tokens on models that think. */
+    AI_MAX_OUTPUT_TOKENS: int(256, 64_000).default(16_000),
+    /** Anthropic effort level; unset = the model's default. Not supported by every model. */
+    AI_EFFORT: z.enum(["low", "medium", "high", "xhigh", "max"]).optional(),
+    /** Anthropic: retry safety-classifier refusals on Anthropic's recommended fallback model. */
+    AI_REFUSAL_FALLBACK: bool.default(true),
+    /** AI requests (batches of issues) sent in parallel per scan. */
+    AI_CONCURRENCY: int(1, 8).default(3),
     ANTHROPIC_API_KEY: z.string().optional(),
     OPENAI_API_KEY: z.string().optional(),
     OPENAI_BASE_URL: z.string().url().optional(),
@@ -146,6 +155,8 @@ export function describeConfig(cfg: AppConfig) {
     aiProvider: cfg.AI_PROVIDER,
     aiModel: cfg.AI_MODEL ?? null,
     aiConfigured: cfg.AI_PROVIDER !== "none",
+    aiEffort: cfg.AI_EFFORT ?? null,
+    aiRefusalFallback: cfg.AI_PROVIDER === "anthropic" && cfg.AI_REFUSAL_FALLBACK,
     figmaConfigured: Boolean(cfg.FIGMA_ACCESS_TOKEN),
     signupEnabled: cfg.AUTH_ALLOW_SIGNUP,
     encryptionKeyConfigured: Boolean(cfg.ENCRYPTION_KEY),

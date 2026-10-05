@@ -122,7 +122,11 @@ export const issue = pgTable(
       .references(() => scan.id, { onDelete: "cascade" }),
     category: varchar({ length: 64 }).notNull(),
     subcategory: varchar({ length: 64 }),
+    /** Scanner rule the issue's findings come from (issues group findings of one rule). */
+    ruleId: varchar({ length: 128 }),
     severity: severityEnum().notNull(),
+    /** Why the severity was chosen (scanner rule, or the AI's justification after grounding). */
+    severityRationale: text(),
     title: text().notNull(),
     description: text().notNull(),
     affectedUrls: jsonb().$type<string[]>().notNull(),
@@ -131,8 +135,12 @@ export const issue = pgTable(
     actual: text(),
     recommendation: text(),
     confidence: real().notNull(),
+    /** Strongest verdict among the findings: potential = needs review, inconclusive = unable to verify. */
+    verdict: findingVerdictEnum().notNull().default("confirmed"),
     origin: issueOriginEnum().notNull(),
     groundingStatus: groundingStatusEnum().notNull(),
+    /** The AI request that covered this issue (null when AI was not used). */
+    aiRunId: uuid().references(() => aiRun.id, { onDelete: "set null" }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -142,7 +150,10 @@ export const issue = pgTable(
   ],
 );
 
-/** Every issue must reference at least one real scanner finding (enforced in the service layer). */
+/**
+ * Every issue references at least one real scanner finding (enforced in the service layer) and
+ * every finding belongs to at most one issue (enforced here).
+ */
 export const issueFinding = pgTable(
   "issue_finding",
   {
@@ -153,7 +164,10 @@ export const issueFinding = pgTable(
       .notNull()
       .references(() => rawFinding.id, { onDelete: "cascade" }),
   },
-  (t) => [primaryKey({ columns: [t.issueId, t.rawFindingId] })],
+  (t) => [
+    primaryKey({ columns: [t.issueId, t.rawFindingId] }),
+    unique("issue_finding_finding_uq").on(t.rawFindingId),
+  ],
 );
 
 export const issueStatusEvent = pgTable(
@@ -167,6 +181,8 @@ export const issueStatusEvent = pgTable(
     toStatus: issueStatusEnum().notNull(),
     /** Null when the system changed the status (e.g. reopened by a rescan). */
     userId: text().references(() => user.id, { onDelete: "set null" }),
+    /** Scan whose results caused a system change (detection, evidence-based status). */
+    scanId: uuid().references(() => scan.id, { onDelete: "set null" }),
     note: text(),
     createdAt: createdAt(),
   },
@@ -183,25 +199,38 @@ export const groundingCheck = pgTable(
     checkType: varchar({ length: 64 }).notNull(),
     passed: boolean().notNull(),
     detail: jsonb().$type<Record<string, unknown>>(),
+    /** Order in which the validator ran the checks. */
+    position: integer().notNull().default(0),
   },
   (t) => [index("grounding_check_issue_idx").on(t.issueId)],
 );
 
-export const aiRun = pgTable("ai_run", {
-  id: uuid().primaryKey().defaultRandom(),
-  scanId: uuid()
-    .notNull()
-    .references(() => scan.id, { onDelete: "cascade" }),
-  provider: varchar({ length: 64 }).notNull(),
-  model: varchar({ length: 128 }).notNull(),
-  status: jobStatusEnum().notNull(),
-  inputTokens: integer(),
-  outputTokens: integer(),
-  latencyMs: integer(),
-  error: text(),
-  createdAt: createdAt(),
-});
+/** One AI request (a batch of issues). Prompts and responses are not stored. */
+export const aiRun = pgTable(
+  "ai_run",
+  {
+    id: uuid().primaryKey().defaultRandom(),
+    scanId: uuid()
+      .notNull()
+      .references(() => scan.id, { onDelete: "cascade" }),
+    provider: varchar({ length: 64 }).notNull(),
+    model: varchar({ length: 128 }).notNull(),
+    status: jobStatusEnum().notNull(),
+    inputTokens: integer(),
+    outputTokens: integer(),
+    latencyMs: integer(),
+    error: text(),
+    /** Batch details: category, issue groups, stop reason, serving model, prompt version. */
+    detail: jsonb().$type<Record<string, unknown>>(),
+    createdAt: createdAt(),
+  },
+  (t) => [index("ai_run_scan_idx").on(t.scanId)],
+);
 
+/**
+ * A generated report file (PDF, Markdown or JSON) for one scan. The row is also the job: the web
+ * app inserts it as pending, the worker claims it with SKIP LOCKED and stores the file.
+ */
 export const report = pgTable(
   "report",
   {
@@ -216,9 +245,14 @@ export const report = pgTable(
     error: text(),
     createdByUserId: text().references(() => user.id, { onDelete: "set null" }),
     createdAt: createdAt(),
+    /** Set when a worker claims the job (stale jobs are failed with a retry hint). */
+    startedAt: timestamp({ withTimezone: true }),
     completedAt: timestamp({ withTimezone: true }),
   },
-  (t) => [index("report_scan_idx").on(t.scanId)],
+  (t) => [
+    index("report_scan_idx").on(t.scanId),
+    index("report_status_created_idx").on(t.status, t.createdAt),
+  ],
 );
 
 /** Cached comparison result; always recomputable from issue/scan records. */

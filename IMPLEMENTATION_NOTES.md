@@ -22,7 +22,8 @@
   drizzle-orm 0.45, pino 10.
 - PostgreSQL-backed queue (pg-boss) planned for Phase 4; no Redis.
 - Live scan status: `scanner_run` rows, then Postgres NOTIFY, then SSE (Phase 4).
-- Scanners deterministic and evidence-first; AI only groups/explains; grounding deterministic.
+- Scanners deterministic and evidence-first; grouping deterministic; AI only explains (writes issue
+  text) and the deterministic grounding validator decides what of it is shown (Phase 7).
 - `issue_track` (cross-scan status) + `issue` (per-scan occurrence) for scan comparison.
   The human-readable issue id `ISSUE-<displayNo>` lives on `issue_track`, so it stays stable across
   rescans; `issue_track` also carries the latest severity/category/title for fast counts.
@@ -168,13 +169,142 @@
   that contain `sr-only` spans need `relative`, otherwise the absolutely positioned spans escape the
   scroll container and widen the page. Use `useRefreshWhile()` to poll while jobs process.
 
+## Phase 7 decisions
+- `packages/ai` (depends on `@qa/core`, zod, `@anthropic-ai/sdk`; used by the worker only, never by
+  the web bundle). Pure modules: `grouping` → `deterministic` + `catalog` → `prompt` → `interpret`
+  (provider calls) → `grounding` → `issues` (drafts); `values` is the fact extractor; `guideline`
+  is AI-assisted guideline reading.
+- **Issue identity is deterministic.** Groups: one per (scanner, rule); design and content: one
+  per finding fingerprint. Fingerprint = sha256(`issue-v1` + scanner + rule [+ finding
+  fingerprint]); it is the `issue_track` key, so AI output can never split, merge or rename what is
+  tracked across scans (keeps Phase 9 comparisons stable). The AI writes text for a group only.
+- Group facts: affected pages = finding pages + page URLs in evidence (`page`, `pages`(`.items`),
+  `firstSeenOn`, `scannedUrl`, `requested`, `observations[].url|page`, `linkedFrom[].page`; link
+  targets/resources are not pages). Verdict: confirmed > potential > inconclusive. Allowed
+  severities: within one level of the max scanner severity, never higher without a confirmed finding.
+- Deterministic text: single finding = its title/message; groups = shared title + "(N pages /
+  elements)", first message + "Found N times (ids) on M pages", "Needs review" note for potential,
+  "Unable to verify from available evidence." prefix for inconclusive; expected/actual only when all
+  findings agree; recommendation from `catalog.ts` (every non-axe rule has an entry; axe rules use
+  the rule's helpUrl from evidence; design uses token/expected/source/actual from evidence; content
+  quotes the approved text). `CATALOGED_RULES` + a unit test keep it in step with the scanners.
+- Grounding corpus of an issue = its findings (all fields + evidence data incl. keys), group facts,
+  its catalog text, WCAG references derived from axe tags (+ "WCAG 2.2 A/AA" scan scope for
+  accessibility) and, for design issues, the scan's frozen design spec. Facts checked in AI text:
+  numbers (+unit; rounding allowed only to fewer decimals and never small values to integers),
+  hex/rgb colors (normalized), URLs (normalized), site paths, quoted text (not code spans), finding
+  ids with scanner prefixes (`FINDING_ID_PREFIXES`). Prose without such tokens is not checkable;
+  claims add a cited check (field of one finding; no facts → needs a shared significant word).
+- Outcomes: hard failure (no/unknown/foreign/evidence-less cited findings) → `rejected`,
+  `origin=deterministic`; soft failures replace only the field → `partial`; title + description +
+  recommendation all failed → `rejected`; all checks pass → `passed`. No AI text (provider none,
+  failed or skipped request, group missing from the response) → `not_applicable` with an
+  `ai_output` check explaining why (none when no provider). Checks are stored in validator order
+  (`grounding_check.position`).
+- Structural zod schema only (no length limits) so one oversized field cannot discard a batch;
+  JSON Schema from `z.toJSONSchema` minus `$schema`/constraints, nullable as `anyOf`; all fields
+  required (works for Anthropic structured outputs and OpenAI strict mode).
+- Anthropic provider: `client.beta.messages.stream(...).finalMessage()`, `output_config.format`
+  json_schema (+ `effort` only if `AI_EFFORT` is set), system prompt with `cache_control`, no
+  `temperature`/`thinking` (current models reject sampling params; default thinking applies).
+  `fallbacks: "default"` + beta `server-side-fallback-2026-07-01` only for `REFUSAL_FALLBACK_MODELS`
+  and `AI_REFUSAL_FALLBACK=true`; usage summed over `usage.iterations` when a fallback answered.
+  The SDK parses output only for zod-helper formats, so `stop_reason` (refusal, max_tokens) is
+  checked before our own JSON.parse + zod. Errors mapped to stable `AIProviderError` codes;
+  `auth`/`not_found`/`bad_request`/`not_configured` are fatal (later batches not sent).
+- OpenAI-compatible provider: plain fetch to `{OPENAI_BASE_URL}/chat/completions`, strict
+  `json_schema` response format, `max_tokens`, `temperature`, 2 retries for 429/5xx/network
+  (Retry-After honored up to 10 s), refusal via `message.refusal`/`content_filter`.
+- Batches: one category per request, ≤ 10 groups and ≤ 60k input chars, ≤ 200 groups per scan
+  sent to AI, ≤ 5 sample findings per group, strings ≤ 240 chars, arrays ≤ 8, depth ≤ 4,
+  screenshots omitted. Input JSON is escaped (`<`, `>`, `&` → `<` …) inside
+  `<scan_findings>`; the system prompt says the data may contain instructions and must not be
+  followed. AI step budget = 85% of `SCAN_SCANNER_TIMEOUT_MS` (abort → remaining batches skipped),
+  so the grounding step always runs; `AI_CONCURRENCY` parallel requests.
+- Steps: `ai` and `grounding` are planned as pending for every new scan; the worker marks `ai`
+  skipped (`NO_AI_PROVIDER_REASON`) without a provider or findings; all AI requests failing makes
+  `ai` failed (scan completed_with_failures) but issues are still created. Neither step adds to
+  `findingCount` (scan finding totals stay correct); issue counts are in `grounding.checks`.
+- Materialization (`scanIssuesRepo.materializeScanIssues`): one transaction, project row locked,
+  the scan's issues deleted first (idempotent re-runs), checks: ≥1 finding per issue, each finding
+  once, all findings belong to the scan, unique fingerprints. New tracks numbered from
+  `project.issue_counter` in group order (severity first). Existing tracks get the latest
+  severity/title/category/lastSeen; status is updated only while system-managed (`open`,
+  `inconclusive`) — user statuses are kept (reopen logic is Phase 9). `issue_finding.raw_finding_id`
+  is unique. `ai_run`: one row per sent request (status, tokens, latency, serving model, error,
+  detail incl. prompt version); prompts/responses are never stored.
+- AI-assisted guideline reading (reference worker, only with a provider, 180 s cap): lines with
+  design keywords/values are sent as `L<n>`; a value is kept only if written in its cited line
+  (hex/rgb color; number+unit px/pt, pt→px; weight number or keyword; font name substring; role
+  named: `h1|heading 1|headline 1`, body/paragraph/copy, link, button, primary/secondary button);
+  the color name must be in the line (else "Color <hex>"). Merge: only new color names/values,
+  typography roles and buttons absent from the literal extraction. `TokenSource.method = "ai"`
+  marks these citations ("read with AI assistance"). Failure → literal draft + `meta.ai`.
+- UI: per-scan issues page is the Phase 7 transparency view (no status changes; the issue
+  explorer/detail/status workflow is Phase 8). Inline links in text need `underline` (axe
+  `link-in-text-block`).
+
+## Phase 8 decisions
+- **Reports on demand, not a scan step.** A report reflects issue statuses at generation time, so
+  it is requested for a finished scan (`REPORTABLE_SCAN_STATUSES`) and can be regenerated.
+  `planScanSteps` dropped `report`; migration `0005` rewords old skipped `report` rows.
+- Job = `report` row (pending/running/completed/failed; `started_at` added). `createReport` locks
+  the scan row, refuses unfinished scans and a second pending/running report of the same format
+  (409), inserts and NOTIFYs `report_queued` in one transaction. The report loop
+  (`apps/worker/src/reports`) mirrors the reference loop: LISTEN + 5 s poll, stale (5 min) →
+  failed with a retry hint. `completeReport` only succeeds while the row is still `running`; if the
+  row was deleted or recovered meanwhile, the file is removed. Running reports cannot be deleted.
+- `packages/reports` is pure (no DB, no browser): `buildReportData(ReportSource)` → `ReportData`
+  (schema v1, deterministic for a given `generatedAt`), `renderJson`, `renderMarkdown`,
+  `renderHtml`. `reportsRepo.loadReportSource` returns the `ReportSource` shape (structural; the
+  worker typecheck enforces compatibility). Evidence storage keys never appear in reports
+  (`hasStoredFile` only).
+- Escaping: Markdown backslash-escapes markdown punctuation and writes `< > &` as entities; lines
+  cannot start lists or headings; code spans use a fence longer than any backtick run inside. HTML
+  escapes `& < > " '`; the template has no `src`, `href` or `url()`. PDF: Chromium context with
+  `javaScriptEnabled: false`, `offline`, route `**/*` aborted, `setContent`, A4, footer with page
+  numbers (plain text, escaped).
+- Readability: Markdown/PDF finding lines omit expected/actual values identical to the issue's and
+  clip long values (240 chars, selectors 160) with an ellipsis; the JSON report keeps everything.
+  Technology is shown as site technologies plus `server: …` separately, as on the scan page. The
+  PDF steps table keeps Result/Findings/Duration unbroken (`nowrap`).
+- Downloads: `GET /api/v1/reports/:id/download` (owner-checked, `attachment`, ASCII file name
+  `qa-report-<project-slug>-scan-<n>.<ext>`, `nosniff`, sandbox CSP). Report keys
+  `reports/<scanId>/<reportId>.<ext>` are not served by `/api/v1/artifacts` (only `scans/…`). The
+  e2e cleanup also removes `reports/<scanId>`.
+- Status workflow: `USER_ISSUE_STATUSES` = open, in_progress, resolved, ignored (zod schemas in
+  `@qa/core/domain`; note ≤ 2000 chars, trimmed, empty → none). `changeIssueStatus` locks the tracks
+  (`FOR UPDATE OF issue_track`), requires every id to be owned (else nothing changes, 404), skips
+  tracks already in the target status (no event), sets/clears `resolved_at`, writes one event per
+  change (user id, note). Bulk ≤ 100 ids, de-duplicated.
+- System events (`user_id` null, `scan_id` set): `materializeScanIssues` writes "First detected by
+  this scan." for new tracks and "Status set from the evidence of this scan." when a system status
+  (open/inconclusive) changes. Re-running materialization adds no duplicate events. User statuses
+  are still kept across scans (reopen logic is Phase 9).
+- Explorer: `lib/issue-filters.ts` is shared by the pages and `GET /api/v1/issues`; invalid values
+  are dropped (never 400). The verdict filter groups inconclusive + unable_to_verify as "Unable to
+  verify". Latest-occurrence columns (verdict, confidence, page count, origin) come from the `issue`
+  row of `last_seen_scan_id`; URL filter = `affected_urls::text ilike` (escaped); "Last detected" =
+  creation time of the last scan that saw the issue.
+- Issue detail pages use the stable number (`/projects/:id/issues/:displayNo`, `?scan=` for older
+  occurrences); the API uses the track uuid (`/api/v1/issues/:id`). The findings view and the
+  per-scan issues page link to the detail page with `?scan=`.
+- Selected table rows use `bg-primary/5`; text on them must be `text-muted` or darker
+  (`text-subtle` drops below 4.5:1 there — caught by the e2e axe audit).
+- A `next start` (e.g. a preview server on 3000) started before `npm run build` serves HTML that
+  references chunks of the old build: pages render but never hydrate. Restart web servers after
+  every build (seen during the Phase 8 manual check; e2e starts its own server on 3100).
+
 ## Environment facts
 - PostgreSQL 18 binaries: `C:\Program Files\PostgreSQL\18\bin` (not on PATH). Service `postgresql-x64-18`.
 - No Docker, no Redis, no pnpm. Windows 11, Node 22.16.
 - Project folder: `C:\Users\Siddharth\Downloads\qa-copilot`.
 
 ## Unfinished tasks
-- None inside Phase 6. Next: Phase 7 (after approval).
+- None inside Phase 8. Next: Phase 9 (after approval). Phases 6, 7 and 8 are not committed yet;
+  a git object `dfba1be` (not on any branch) holds the exact Phase 6 tree for a separate commit
+  (creating the checkpoint commits was blocked by the tool permission policy in the Phase 8
+  session; see PROJECT_STATUS.md).
 
 ## Known bugs
 - None known.

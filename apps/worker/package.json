@@ -18,7 +18,9 @@
     "pg": "^8.23.1",
     "@qa/scanners": "0.1.0",
     "playwright": "^1.63.0",
-    "@qa/reference": "0.1.0"
+    "@qa/reference": "0.1.0",
+    "@qa/ai": "0.1.0",
+    "@qa/reports": "0.1.0"
   },
   "devDependencies": {
     "@types/pg": "^8.23.1"

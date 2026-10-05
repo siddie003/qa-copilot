@@ -17,13 +17,17 @@ export const IMPLEMENTED_STEPS = new Set<string>([
   "responsive",
   "design",
   "content",
+  "ai",
+  "grounding",
 ]);
 
 const NOT_IMPLEMENTED_REASON: Record<string, string> = {
   scanner: "Scanner module not implemented yet (planned for Phase 5)",
-  ai: "AI interpretation not implemented yet (planned for Phase 7)",
-  report: "Report generation not implemented yet (planned for Phase 8)",
 };
+
+/** Reason the AI step is skipped when no provider is configured (issues are still created). */
+export const NO_AI_PROVIDER_REASON =
+  "No AI provider configured (AI_PROVIDER=none): issues are created from the scanner findings with the scanners' own wording and the rule catalog's fix guidance.";
 
 /** Reasons used when a comparison has nothing to compare against (never shown as "completed"). */
 export const NO_REFERENCE_REASON = {
@@ -63,10 +67,11 @@ export function planScanSteps(
     );
   }
   const available: Record<string, boolean> = { design: refs.designSpec, content: refs.content };
-  for (const key of ["design", "content", "ai", "report"]) {
-    if (!IMPLEMENTED_STEPS.has(key))
-      steps.push({ stepKey: key, status: "skipped", statusReason: NOT_IMPLEMENTED_REASON[key] });
-    else if (key in available && !available[key])
+  // ai: interprets the findings (skipped by the worker when no provider is configured);
+  // grounding: validates AI text against the evidence and creates the issues (always runs).
+  // Reports are not a scan step: they are generated on demand for finished scans (Phase 8).
+  for (const key of ["design", "content", "ai", "grounding"]) {
+    if (key in available && !available[key])
       steps.push({
         stepKey: key,
         status: "skipped",

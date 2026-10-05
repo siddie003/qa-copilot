@@ -29,6 +29,20 @@
       "when": 1791087969699,
       "tag": "0003_reference_processing",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1791107171305,
+      "tag": "0004_ai_interpretation",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1791171713075,
+      "tag": "0005_issue_workflow_reports",
+      "breakpoints": true
     }
   ]
 }

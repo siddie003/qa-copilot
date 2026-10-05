@@ -12,6 +12,7 @@ import { startGuardProxy, type GuardProxy } from "./proxy";
 
 export { startGuardProxy, type GuardProxy };
 export { designStylesScript, TEXT_BLOCKS_SCRIPT };
+export { renderPdf, type PdfOptions } from "./pdf";
 
 export interface ViewportSpec {
   name: string;

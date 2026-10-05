@@ -106,6 +106,16 @@ export default async function ScannerResultsPage({ params }: { params: Promise<{
                       {Number(r.checks.inconclusiveTotal ?? 0)} could not be verified
                     </span>
                   )}
+                  {(r.stepKey === "ai" || r.stepKey === "grounding") &&
+                  r.status !== "skipped" &&
+                  r.status !== "pending" ? (
+                    <Link
+                      href={`/projects/${project.id}/scans/${latest.id}/issues`}
+                      className="mt-1 block text-xs font-medium text-primary hover:underline"
+                    >
+                      View issues and evidence checks
+                    </Link>
+                  ) : null}
                   {r.checks?.comparison ? (
                     <Link
                       href={`/projects/${project.id}/scans/${latest.id}/comparisons`}

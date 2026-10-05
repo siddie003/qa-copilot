@@ -82,6 +82,8 @@ export const tokenSourceSchema = z.object({
   page: z.number().int().min(1).optional(),
   line: z.number().int().min(1).optional(),
   excerpt: z.string().max(300).optional(),
+  /** "ai": read with AI assistance and verified against the cited text (absent: read literally). */
+  method: z.enum(["ai"]).optional(),
 });
 export type TokenSource = z.infer<typeof tokenSourceSchema>;
 
@@ -302,5 +304,5 @@ export function describeSource(s: TokenSource | null | undefined): string {
   if (s.type === "manual") return "entered manually";
   if (s.type === "figma")
     return `Figma${s.name ? ` “${s.name}”` : ""}${s.nodeId ? ` (node ${s.nodeId})` : ""}`;
-  return `${s.filename ?? "document"}${s.page ? `, page ${s.page}` : ""}${s.line ? `, line ${s.line}` : ""}${s.excerpt ? `: “${s.excerpt}”` : ""}`;
+  return `${s.filename ?? "document"}${s.page ? `, page ${s.page}` : ""}${s.line ? `, line ${s.line}` : ""}${s.excerpt ? `: “${s.excerpt}”` : ""}${s.method === "ai" ? " (read with AI assistance)" : ""}`;
 }

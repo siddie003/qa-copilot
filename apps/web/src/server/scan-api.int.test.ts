@@ -102,7 +102,12 @@ describe.skipIf(!hasTestDb)("scan API (route handlers, real database)", () => {
     expect(detail.runs.find((r: { stepKey: string }) => r.stepKey === "seo").status).toBe(
       "pending",
     );
-    expect(detail.runs.find((r: { stepKey: string }) => r.stepKey === "ai").status).toBe("skipped");
+    // AI analysis and evidence validation are planned; the worker skips AI without a provider.
+    const status = (key: string) =>
+      detail.runs.find((r: { stepKey: string }) => r.stepKey === key).status;
+    expect([status("ai"), status("grounding")]).toEqual(["pending", "pending"]);
+    // Reports are generated on demand for finished scans, not during the scan (Phase 8).
+    expect(detail.runs.some((r: { stepKey: string }) => r.stepKey === "report")).toBe(false);
 
     expect(
       (await scanRoute.GET(req(`/api/v1/scans/${scanId}`, bob), p({ id: scanId }))).status,

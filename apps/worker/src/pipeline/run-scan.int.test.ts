@@ -19,6 +19,8 @@ import {
   getDb,
   pipelineRepo,
   projectsRepo,
+  reportsRepo,
+  scanIssuesRepo,
   schema,
   secretsRepo,
 } from "@qa/db";
@@ -34,6 +36,7 @@ import {
 } from "../../../../fixtures/demo-site/server.mjs";
 import { createTestUser, hasTestDb, resetDatabase } from "../../../../tests/setup/db";
 import { processNextReferenceJob } from "../references/process";
+import { processNextReport } from "../reports/generate";
 import { runScan, type ScanRuntime } from "./run-scan";
 
 // Deterministic DNS: only localhost exists, so external links never touch the internet.
@@ -164,10 +167,19 @@ describe.skipIf(!hasTestDb)("scan pipeline (preflight → crawl → capture → 
       status: "skipped",
       statusReason: expect.stringMatching(/No confirmed design reference/),
     });
+    // No AI provider in this runtime: the AI step is skipped with the reason, and the grounding
+    // step still turns every finding into an issue (scanner wording).
     expect(steps.ai).toMatchObject({
       status: "skipped",
-      statusReason: expect.stringMatching(/Phase 7/),
+      statusReason: expect.stringMatching(/No AI provider configured \(AI_PROVIDER=none\)/),
     });
+    expect(steps.grounding).toMatchObject({
+      status: "completed",
+      toolName: "QA Copilot grounding validator",
+      statusReason: expect.stringMatching(/^\d+ issues from \d+ findings .*no AI text to validate/),
+    });
+    // Reports are generated on demand for finished scans, not during the scan (Phase 8).
+    expect(steps.report).toBeUndefined();
 
     const pages = await pagesOf(queued.id);
     expect(pages.size).toBe(19);
@@ -230,6 +242,54 @@ describe.skipIf(!hasTestDb)("scan pipeline (preflight → crawl → capture → 
       ),
     ).toBe(false);
     expect(JSON.stringify(steps.links!.checks)).toMatch(/members.*HTTP 401/);
+
+    // Issues: one per rule (deterministic grouping), every finding in exactly one issue.
+    const scanIssues = (await scanIssuesRepo.listScanIssues(getDb(), ownerId, queued.id))!;
+    const linked = scanIssues.issues.flatMap((i) => i.findings.map((x) => x.id));
+    expect(new Set(linked).size).toBe(findings.length);
+    expect(linked).toHaveLength(findings.length);
+    expect(scanIssues.issues).toHaveLength(
+      new Set(findings.map((x) => `${x.scanner}/${x.ruleId}`)).size,
+    );
+    expect(
+      scanIssues.issues.every(
+        (i) =>
+          i.origin === "deterministic" &&
+          i.groundingStatus === "not_applicable" &&
+          i.recommendation,
+      ),
+    ).toBe(true);
+    const contrast = scanIssues.issues.find((i) => i.ruleId === "color-contrast")!;
+    expect(contrast.affectedUrls.some((u) => u.endsWith("/products"))).toBe(true);
+    expect(contrast.recommendation).toMatch(/dequeuniversity\.com\/rules\/axe/);
+    expect(steps.grounding!.statusReason).toContain(
+      `${scanIssues.issues.length} issues from ${findings.length} findings`,
+    );
+
+    // Report (Phase 8): built from this scan's stored rows, nothing added or lost.
+    expect(
+      (await reportsRepo.createReport(getDb(), ownerId, queued.id, "json", ownerId)).kind,
+    ).toBe("created");
+    expect(await processNextReport(rt)).toBe(true);
+    const [reportRow] = await getDb()
+      .select()
+      .from(schema.report)
+      .where(eq(schema.report.scanId, queued.id));
+    expect(reportRow!.status).toBe("completed");
+    const report = JSON.parse((await rt.storage.read(reportRow!.storageKey!)).toString("utf8"));
+    expect(report.issues).toHaveLength(scanIssues.issues.length);
+    expect(report.summary.findings.total).toBe(findings.length);
+    expect(
+      report.issues
+        .flatMap((i: { findings: Array<{ id: string }> }) => i.findings.map((x) => x.id))
+        .sort(),
+    ).toEqual(findings.map((x) => x.displayId).sort());
+    expect(report.issues.map((i: { id: string }) => i.id).sort()).toEqual(
+      scanIssues.issues.map((i) => `ISSUE-${i.displayNo}`).sort(),
+    );
+    expect(report.steps.map((x: { key: string }) => x.key).sort()).toEqual(
+      Object.keys(steps).sort(),
+    );
 
     // Capture measurements are stored.
     const homeCapture = (
@@ -441,6 +501,21 @@ describe.skipIf(!hasTestDb)("scan pipeline (preflight → crawl → capture → 
     });
     // Browser-default form control colors (e.g. the /contact button) are not palette near-misses.
     expect(byRule("design", "design-color-near-palette")).toHaveLength(0);
+    // Each design/content mismatch is its own issue, citing the reference value.
+    const refIssues = (await scanIssuesRepo.listScanIssues(getDb(), ownerId, queued.id))!.issues;
+    const designFindings = findings.filter((x) => x.scanner === "design");
+    expect(refIssues.filter((i) => i.category === "design")).toHaveLength(designFindings.length);
+    expect(refIssues.filter((i) => i.category === "content")).toHaveLength(
+      findings.filter((x) => x.scanner === "content").length,
+    );
+    expect(refIssues.find((i) => i.title.startsWith("Heading 1 font size"))).toMatchObject({
+      ruleId: "design-font-size-mismatch",
+      expected: "48px",
+      actual: "40px",
+      recommendation: expect.stringMatching(
+        /typography\.h1\.fontSize is 48px as defined in the design reference/,
+      ),
+    });
     const changed = byRule("content", "content-changed-wording").find(
       (f) => f.verdict === "confirmed",
     )!;

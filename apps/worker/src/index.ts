@@ -12,6 +12,7 @@ import { createLocalStorage } from "@qa/storage";
 import { boundPort, startHealthServer, type WorkerStatus } from "./health-server";
 import { startScanWorker, type ScanWorker } from "./pipeline/scan-worker";
 import { startReferenceWorker, type ReferenceWorker } from "./references/reference-worker";
+import { startReportWorker, type ReportWorker } from "./reports/report-worker";
 
 const DB_CHECK_INTERVAL_MS = 15_000;
 
@@ -35,6 +36,7 @@ async function main() {
 
   let scanWorker: ScanWorker | undefined;
   let referenceWorker: ReferenceWorker | undefined;
+  let reportWorker: ReportWorker | undefined;
   let scanWorkerStarting = false;
   const ensureScanWorker = async () => {
     if (scanWorker || scanWorkerStarting) return;
@@ -59,6 +61,7 @@ async function main() {
         { db: getDb(), storage, config, log },
         config.DATABASE_URL,
       );
+      reportWorker = await startReportWorker({ db: getDb(), storage, log }, config.DATABASE_URL);
     } catch (err) {
       log.error(errorFields(err), "could not start scan worker; retrying on next database check");
     } finally {
@@ -100,6 +103,7 @@ async function main() {
         }
       : { status: "not_started" },
     referenceWorker: { status: referenceWorker ? "running" : "not_started" },
+    reportWorker: { status: reportWorker ? "running" : "not_started" },
   });
 
   let server: http.Server | undefined;
@@ -122,6 +126,9 @@ async function main() {
       referenceWorker
         ?.stop()
         .catch((err) => log.error(errorFields(err), "error stopping reference worker")),
+      reportWorker
+        ?.stop()
+        .catch((err) => log.error(errorFields(err), "error stopping report worker")),
     ]);
     await new Promise<void>((resolve) => (server ? server.close(() => resolve()) : resolve()));
     await closeDb().catch((err) => log.error(errorFields(err), "error closing database pool"));

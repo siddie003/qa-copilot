@@ -24,6 +24,7 @@ interface RunJson {
   toolVersion: string | null;
   durationMs: number | null;
   startedAt: string | null;
+  checks?: Record<string, unknown> | null;
 }
 
 interface Technology {
@@ -153,6 +154,10 @@ export function LiveScan({
 
   const running = !TERMINAL.has(scan.status);
   const totalFindings = scan.runs.reduce((sum, r) => sum + (r.findingCount ?? 0), 0);
+  const groundingRun = scan.runs.find((r) => r.stepKey === "grounding");
+  const issueCount =
+    groundingRun?.status === "completed" ? Number(groundingRun.checks?.issues ?? 0) : 0;
+  const issuesHref = `/projects/${projectId}/scans/${scan.id}/issues`;
   const elapsed = scan.startedAt
     ? (scan.finishedAt ? new Date(scan.finishedAt) : new Date()).getTime() -
       new Date(scan.startedAt).getTime()
@@ -198,12 +203,25 @@ export function LiveScan({
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
+          {issueCount > 0 && (
+            <Link href={issuesHref} className={buttonClasses("primary")}>
+              View {issueCount} issue{issueCount === 1 ? "" : "s"}
+            </Link>
+          )}
           {totalFindings > 0 && (
             <Link
               href={`/projects/${projectId}/scans/${scan.id}/findings`}
-              className={buttonClasses(running ? "secondary" : "primary")}
+              className={buttonClasses(running || issueCount > 0 ? "secondary" : "primary")}
             >
               View {totalFindings} finding{totalFindings === 1 ? "" : "s"}
+            </Link>
+          )}
+          {!running && (
+            <Link
+              href={`/projects/${projectId}/reports?scan=${scan.id}`}
+              className={buttonClasses("secondary")}
+            >
+              Generate report
             </Link>
           )}
           {running && !scan.cancelRequestedAt && (
@@ -256,6 +274,18 @@ export function LiveScan({
                         View comparison (matches and mismatches)
                       </Link>
                     )}
+                  {((r.stepKey === "grounding" && r.status === "completed" && issueCount > 0) ||
+                    (r.stepKey === "ai" &&
+                      (r.status === "completed" || r.status === "failed"))) && (
+                    <Link
+                      href={issuesHref}
+                      className="block text-xs font-medium text-primary hover:underline"
+                    >
+                      {r.stepKey === "ai"
+                        ? "View AI requests and evidence checks"
+                        : `View ${issueCount} issue${issueCount === 1 ? "" : "s"}`}
+                    </Link>
+                  )}
                   {r.toolName && (
                     <span className="block text-xs text-subtle">
                       {r.toolName}

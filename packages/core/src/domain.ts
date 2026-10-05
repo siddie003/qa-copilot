@@ -66,6 +66,59 @@ export type IssueStatus = (typeof ISSUE_STATUSES)[number];
 /** Statuses that count as outstanding work. */
 export const ACTIVE_ISSUE_STATUSES: IssueStatus[] = ["open", "in_progress", "reopened"];
 
+/**
+ * Statuses a user can set. "reopened" (a resolved issue found again) and "inconclusive" (the
+ * evidence cannot confirm the issue) are set by the system from scan results only.
+ */
+export const USER_ISSUE_STATUSES = ["open", "in_progress", "resolved", "ignored"] as const;
+export type UserIssueStatus = (typeof USER_ISSUE_STATUSES)[number];
+
+const statusNote = z
+  .string()
+  .trim()
+  .max(2000, "the note must be at most 2000 characters")
+  .optional()
+  .transform((v) => (v ? v : undefined));
+
+export const issueStatusChangeSchema = z.object({
+  status: z.enum(USER_ISSUE_STATUSES, {
+    error: "status must be one of: open, in_progress, resolved, ignored",
+  }),
+  note: statusNote,
+});
+export type IssueStatusChange = z.infer<typeof issueStatusChangeSchema>;
+
+export const MAX_BULK_ISSUES = 100;
+
+export const bulkIssueStatusSchema = issueStatusChangeSchema.extend({
+  ids: z
+    .array(z.uuid("invalid issue id"))
+    .min(1, "select at least one issue")
+    .max(MAX_BULK_ISSUES, `at most ${MAX_BULK_ISSUES} issues at a time`)
+    .transform((ids) => [...new Set(ids)]),
+});
+
+export const REPORT_FORMATS = ["pdf", "md", "json"] as const;
+export type ReportFormatKey = (typeof REPORT_FORMATS)[number];
+
+export const REPORT_FORMAT_LABELS: Record<ReportFormatKey, string> = {
+  pdf: "PDF",
+  md: "Markdown",
+  json: "JSON",
+};
+
+export const reportCreateSchema = z.object({
+  format: z.enum(REPORT_FORMATS, { error: "format must be pdf, md or json" }),
+});
+
+/** Scan statuses a report can be generated for (the scan has stopped changing). */
+export const REPORTABLE_SCAN_STATUSES = [
+  "completed",
+  "completed_with_failures",
+  "failed",
+  "cancelled",
+] as const;
+
 export const viewportSchema = z.object({
   name: z
     .string()

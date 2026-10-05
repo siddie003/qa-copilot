@@ -2,6 +2,82 @@
 
 ## [Unreleased]
 
+### Phase 8: Issue management and reporting (2026-10-05)
+#### Added
+- Issue explorer (all projects and per project): filters for severity, status, verdict
+  (confirmed / needs review / unable to verify), scanner, affected page URL, minimum confidence and
+  last detection, search by title or `ISSUE-n`, sorting, pagination; columns for verdict,
+  confidence, affected pages, last scan and number of scans; row selection with bulk status change.
+- Issue detail page (`/projects/:id/issues/:n`): description, affected pages, element,
+  expected/actual, severity rationale, fix guidance, evidence-backed statements, every source
+  finding with its evidence, grounding checks, all scans the issue was found in (older occurrences
+  viewable) and the status history.
+- Audited status workflow: Open, In progress, Resolved, Ignored with optional note; every change
+  stored in `issue_status_event` with user, time, previous status and note; scans record first
+  detection and evidence-based status changes as system events. Inconclusive and Reopened stay
+  system-only. `resolved_at` maintained.
+- Reports generated on demand from finished scans in PDF, Markdown and JSON (versioned schema
+  `qa-copilot-report` v1): scan settings, all pipeline steps with failed/inconclusive/skipped
+  reasons, checks that could not be verified, and every issue with status, verdict, fix guidance and
+  source findings (JSON: full evidence). Built only from stored records; website text escaped;
+  PDF rendered by Chromium with JavaScript disabled and the network blocked.
+- `packages/reports`; report worker loop (LISTEN `report_queued`, stale recovery); `renderPdf` in
+  `@qa/browser`; Reports tab with format choice, live status, download and delete; Reports button
+  on finished scans; downloads on the global Reports page.
+- API: `GET /api/v1/issues`, `GET /api/v1/projects/:id/issues`, `GET /api/v1/issues/:id`,
+  `PATCH /api/v1/issues/:id/status`, `POST /api/v1/issues/status` (bulk),
+  `GET/POST /api/v1/scans/:id/reports`, `GET/DELETE /api/v1/reports/:id`,
+  `GET /api/v1/reports/:id/download`.
+- Migration `0005_issue_workflow_reports` (`issue_status_event.scan_id`, `report.started_at`,
+  report status index); unit, integration (real database, real Chromium PDF) and end-to-end tests.
+#### Changed
+- Scans no longer plan a "Report generation" step (reports are generated on demand); the reason on
+  older scans' skipped report step was reworded by the migration.
+- Issue links in the explorer, the findings view and the scan issues page open the issue detail
+  page.
+#### Fixed
+- Nothing outstanding from Phase 7.
+
+### Phase 7: AI interpretation and grounding (2026-10-04)
+#### Added
+- `packages/ai`: AI provider abstraction with three providers: Anthropic (official SDK,
+  streaming, structured JSON output, opt-in server-side refusal fallback), OpenAI-compatible
+  (Chat Completions with strict JSON schema, retries) and none.
+- Deterministic pre-grouping of findings into issues (one issue per scanner rule; one per design
+  token or content block) with stable fingerprints, facts (affected pages from findings and
+  evidence, element counts, verdict, allowed severities) and deterministic issue text: scanner
+  wording plus a rule catalog with fix guidance for every rule the scanners emit.
+- AI interpretation in batches per category (bounded input, website data escaped and marked as
+  untrusted, static cacheable system prompt, concurrency limit, time budget, failure isolation;
+  configuration errors stop further requests).
+- Deterministic grounding validator: rejects AI text citing findings that do not exist or belong
+  to another issue (or without evidence); replaces any field whose numbers, colors, URLs, page
+  paths, quotes or finding ids are not in the issue's evidence, counts, rule guidance or design
+  reference; keeps severity within one level (never raised for unconfirmed findings); checks the
+  affected element and every cited claim; enforces the "Unable to verify from available evidence"
+  wording. AI never sets affected URLs, category, fingerprint, findings or confidence.
+- Pipeline steps `ai` (AI analysis; skipped with the reason when no provider is configured) and
+  `grounding` (evidence validation and issue creation; always runs). Issues are stored with
+  tracks (stable `ISSUE-n` numbers per project, user statuses kept), finding links (each finding
+  in exactly one issue, enforced by a unique constraint), grounding checks and one `ai_run` per AI
+  request (tokens, latency, serving model, error; no prompts or responses stored).
+- AI-assisted brand-guideline reading: values the AI proposes are kept only if written in the line
+  they cite (colors, sizes with unit, weights, font names, named roles); literal values win; the
+  result is still a draft to confirm; citations are marked "read with AI assistance".
+- Scan issues page (per-scan interpretation and grounding report with filters, AI requests,
+  source findings and every check), `GET /api/v1/scans/:id/issues`, "View issues" on the scan
+  page, issue links on findings, Issues tab linked to the latest occurrence, AI settings shown in
+  Settings, AI-assisted reading summary on the References page.
+- Migration `0004_ai_interpretation`; config `AI_EFFORT`, `AI_REFUSAL_FALLBACK`,
+  `AI_CONCURRENCY`; tests: provider mocks for both APIs, grounding (fabricated ids, URLs, values,
+  quotes, paths, severity, claims), batching, issue materialization on the real database,
+  guideline grounding, fixture pipeline coverage, API and end-to-end checks.
+#### Changed
+- Defaults: `AI_TIMEOUT_MS` 300000 (was 120000), `AI_MAX_OUTPUT_TOKENS` 16000 (was 8000).
+- The findings view no longer says issues come "in a later phase".
+#### Fixed
+- Nothing outstanding from Phase 6.
+
 ### Phase 6: Design and content references, comparison (2026-10-04)
 #### Added
 - DesignSpec schema with per-token provenance, versioning with drafts and confirmation; token

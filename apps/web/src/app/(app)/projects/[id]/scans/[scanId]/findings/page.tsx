@@ -1,5 +1,5 @@
 import { AppError, FINDING_SOURCE_LABELS, FINDING_SOURCES, SEVERITIES } from "@qa/core";
-import { getDb, pipelineRepo } from "@qa/db";
+import { getDb, pipelineRepo, scanIssuesRepo } from "@qa/db";
 import { SearchCheck } from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
@@ -54,12 +54,13 @@ export default async function FindingsPage({
   const severity = (Array.isArray(q.severity) ? q.severity : q.severity ? [q.severity] : []).filter(
     (s) => (SEVERITIES as readonly string[]).includes(s),
   );
-  const [findings, counts] = await Promise.all([
+  const [findings, counts, issueOf] = await Promise.all([
     pipelineRepo.listFindingsForScan(getDb(), user.id, scanId, {
       scanner: scanner || undefined,
       severity,
     }),
     pipelineRepo.findingCounts(getDb(), scanId),
+    scanIssuesRepo.findingIssueLinks(getDb(), scanId),
   ]);
   const totalAll = counts.reduce((s, c) => s + c.n, 0);
   const base = `/projects/${project.id}/scans/${scanId}/findings`;
@@ -82,8 +83,15 @@ export default async function FindingsPage({
         </Link>
       </div>
       <p className="text-sm text-muted">
-        Raw scanner findings with their evidence. In a later phase they are grouped into issues and
-        explained; nothing here is AI-generated.
+        Raw scanner findings with their evidence, exactly as the scanners reported them; nothing
+        here is AI-generated. Each finding belongs to one{" "}
+        <Link
+          href={`/projects/${project.id}/scans/${scanId}/issues`}
+          className="text-primary underline"
+        >
+          issue of this scan
+        </Link>
+        .
       </p>
 
       <form
@@ -144,7 +152,11 @@ export default async function FindingsPage({
       ) : (
         <ul className="space-y-2">
           {findings.map((f) => (
-            <li key={f.id} className="rounded-lg border border-border bg-surface">
+            <li
+              key={f.id}
+              id={f.displayId}
+              className="scroll-mt-4 rounded-lg border border-border bg-surface"
+            >
               <details>
                 <summary className="flex cursor-pointer list-none flex-wrap items-center gap-x-3 gap-y-1 px-4 py-3">
                   <span className="font-mono text-xs text-subtle">{f.displayId}</span>
@@ -186,6 +198,19 @@ export default async function FindingsPage({
                     )}
                     <dt className="text-muted">Confidence</dt>
                     <dd>{Math.round(f.confidence * 100)}%</dd>
+                    {issueOf.get(f.id) && (
+                      <>
+                        <dt className="text-muted">Issue</dt>
+                        <dd>
+                          <Link
+                            href={`/projects/${project.id}/issues/${issueOf.get(f.id)!.displayNo}?scan=${scanId}`}
+                            className="text-primary hover:underline"
+                          >
+                            ISSUE-{issueOf.get(f.id)!.displayNo}
+                          </Link>
+                        </dd>
+                      </>
+                    )}
                   </dl>
                   <div>
                     <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">

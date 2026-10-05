@@ -44,7 +44,7 @@ export async function signIn(
 
 /**
  * Deletes throwaway accounts created by the tests (cascades to projects and scans) and the
- * stored artifacts (screenshots, snapshots, uploaded documents) of their projects.
+ * stored artifacts (screenshots, snapshots, uploaded documents, reports) of their projects.
  */
 export async function deleteUsers(emails: string[]) {
   const client = new pg.Client({ connectionString: process.env.DATABASE_URL });
@@ -65,8 +65,10 @@ export async function deleteUsers(emails: string[]) {
       "../..",
       process.env.STORAGE_DIR ?? "./storage",
     );
-    for (const { id } of scans.rows)
+    for (const { id } of scans.rows) {
       await rm(path.join(storageRoot, "scans", id), { recursive: true, force: true });
+      await rm(path.join(storageRoot, "reports", id), { recursive: true, force: true });
+    }
     // Uploaded content documents and brand guidelines.
     for (const { id } of projects.rows)
       await rm(path.join(storageRoot, "projects", id), { recursive: true, force: true });
