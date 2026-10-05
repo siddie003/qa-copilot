@@ -80,7 +80,13 @@ const PAGES = {
   "/about": () =>
     layout(
       "About us",
-      `<h1>About us</h1><p>We sell demo products.</p><img src="/images/team.png" width="40" height="40">`,
+      `<h1>About us</h1>
+<p>We sell demo products.</p>
+<p>Our team ships quality products to customers every week.</p>
+<h2>Our mission</h2>
+<p>Make QA simple for every team. Read our <a href="/blog/">blog</a> for updates.</p>
+<p><a class="btn-primary" href="/blog/">Contact our team</a></p>
+<img src="/images/team.png" width="40" height="40">`,
       { description: null },
     ),
   "/products": () =>
@@ -88,6 +94,7 @@ const PAGES = {
       "Products",
       `<h1>Products</h1>
 <p style="color:#c4c4c4;background:#ffffff">Prices include VAT (low-contrast text).</p>
+<p>Browse our full range of widgets and gadgets.</p>
 <ul><li><a href="/products/widget">Widget</a></li><li><a href="/products/gadget">Gadget</a></li></ul>`,
     ),
   "/products/widget": () => layout("Product", `<h1>Widget</h1><p>A very useful widget.</p>`),
@@ -144,7 +151,15 @@ const REDIRECTS = {
   "/chain-mid": [301, "/products"],
 };
 
-const CSS = "body{font-family:system-ui;margin:0}main{padding:1rem}";
+// Design values differ from fixtures/documents/design-spec.json on purpose (see README).
+const CSS = [
+  "body{font-family:system-ui;margin:0;color:#222222;background:#ffffff}",
+  "main{padding:1rem}",
+  "header{background:#f1f5f9}",
+  "h1{font-family:Georgia,serif;font-size:40px;font-weight:700;color:#1a1a2e}",
+  "a{color:#0645ad}",
+  ".btn-primary{display:inline-block;background:#1d4ed8;color:#ffffff;border-radius:6px;padding:12px 24px;text-decoration:none}",
+].join("");
 const APP_JS = "window.demoReady = true;";
 
 /** A real, decodable PNG of random pixels (incompressible, ~360 KB). */

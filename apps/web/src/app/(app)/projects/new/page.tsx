@@ -21,6 +21,7 @@ export default function NewProjectPage() {
           maxDepth: cfg.SCAN_MAX_DEPTH,
         })}
         scanners={SCANNER_KEYS.map((key) => ({ key, label: SCANNER_LABELS[key] }))}
+        maxUploadMb={cfg.MAX_UPLOAD_MB}
       />
     </>
   );

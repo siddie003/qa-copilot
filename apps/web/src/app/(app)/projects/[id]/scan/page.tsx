@@ -1,5 +1,5 @@
 import { SCANNER_KEYS, SCANNER_LABELS, stepLabel } from "@qa/core";
-import { getDb, referencesRepo, scansRepo } from "@qa/db";
+import { contentRepo, designSpecsRepo, getDb, referencesRepo, scansRepo } from "@qa/db";
 import { CheckCircle2, CircleDashed } from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
@@ -33,11 +33,19 @@ function Check({ ok, label, detail }: { ok: boolean; label: string; detail: Reac
 export default async function ProjectScanPage({ params }: { params: Promise<{ id: string }> }) {
   const { user, project } = await loadProjectForPage((await params).id);
   const db = getDb();
-  const [references, contentDocs, latest] = await Promise.all([
+  const [references, specState, docCounts, latest] = await Promise.all([
     referencesRepo.listReferenceSources(db, project.id),
-    referencesRepo.countContentDocuments(db, project.id),
+    designSpecsRepo.getDesignSpecState(db, project.id),
+    contentRepo.documentStatusCounts(db, project.id),
     scansRepo.getLatestScan(db, user.id, project.id),
   ]);
+  const referencesHref = `/projects/${project.id}/references`;
+  const processingRefs = references.filter((r) =>
+    ["pending", "processing"].includes(r.status),
+  ).length;
+  const parsedDocs = docCounts.parsed ?? 0;
+  const waitingDocs = (docCounts.pending ?? 0) + (docCounts.parsing ?? 0);
+  const failedDocs = docCounts.failed ?? 0;
   const active = latest && ["queued", "running"].includes(latest.status) ? latest : null;
   const d = project.scanDefaults;
   const settingsHref = `/projects/${project.id}/settings`;
@@ -49,21 +57,37 @@ export default async function ProjectScanPage({ params }: { params: Promise<{ id
           <ul className="divide-y divide-border">
             <Check ok label="Website" detail={project.websiteUrl} />
             <Check
-              ok={references.length > 0}
-              label="Figma / brand reference"
+              ok={Boolean(specState.active)}
+              label="Design reference"
               detail={
-                references.length
-                  ? `${references.length} reference${references.length === 1 ? "" : "s"} recorded (${references.filter((r) => r.status === "pending").length} not yet processed). Design comparison runs once references are processed (Phase 6).`
-                  : "None. Scanning still works; design comparison is reported as “Unable to verify”."
+                <>
+                  {specState.active
+                    ? `Version ${specState.active.version} is confirmed; scans compare typography, colors and buttons against it.`
+                    : "No confirmed design reference. The design comparison is skipped and reported as “Unable to verify”."}
+                  {specState.draft && " A draft with extracted values is waiting for review."}
+                  {processingRefs > 0 &&
+                    ` ${processingRefs} source(s) are still being processed.`}{" "}
+                  <Link href={referencesHref} className="text-primary underline">
+                    Manage references
+                  </Link>
+                </>
               }
             />
             <Check
-              ok={contentDocs > 0}
+              ok={parsedDocs > 0}
               label="Approved content"
               detail={
-                contentDocs
-                  ? `${contentDocs} document${contentDocs === 1 ? "" : "s"} uploaded.`
-                  : "None. Content comparison is reported as “Unable to verify”. Uploads arrive in Phase 6."
+                <>
+                  {parsedDocs
+                    ? `${parsedDocs} document${parsedDocs === 1 ? "" : "s"} ready for the content comparison.`
+                    : "No processed content documents. The content comparison is skipped and reported as “Unable to verify”."}
+                  {waitingDocs > 0 &&
+                    ` ${waitingDocs} still processing (not included until parsed).`}
+                  {failedDocs > 0 && ` ${failedDocs} failed to process.`}{" "}
+                  <Link href={referencesHref} className="text-primary underline">
+                    Manage content
+                  </Link>
+                </>
               }
             />
             <Check
@@ -156,12 +180,13 @@ export default async function ProjectScanPage({ params }: { params: Promise<{ id
             <StartScan projectId={project.id} websiteUrl={project.websiteUrl} />
           )}
           <p className="mt-3 flex items-start gap-1 text-xs text-muted">
-            Crawling and browser capture run now; the six QA scanners are added in Phase 5 and are
-            shown as skipped until then.
-            <InfoTip label="What does a scan do today?">
-              The scan checks the site is reachable, crawls pages within your limits, and captures
-              each page at every viewport (screenshot, DOM, network, console). Steps that are not
-              implemented yet are marked as skipped with the reason, never as completed.
+            Runs the enabled scanners, then compares the site with the confirmed design reference
+            and approved content when they exist.
+            <InfoTip label="What does a scan do?">
+              The scan checks the site is reachable, crawls pages within your limits, captures each
+              page at every viewport, runs the QA scanners and the reference comparisons. Steps that
+              cannot run (for example AI analysis, added later) are marked as skipped with the
+              reason, never as completed.
             </InfoTip>
           </p>
         </div>

@@ -6,7 +6,9 @@
   "exports": {
     ".": "./src/index.ts",
     "./domain": "./src/domain.ts",
-    "./figma": "./src/figma.ts"
+    "./figma": "./src/figma.ts",
+    "./design-spec": "./src/design-spec.ts",
+    "./content": "./src/content.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json"

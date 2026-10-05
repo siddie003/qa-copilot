@@ -29,9 +29,22 @@ export async function signUp(
   if (!res.ok()) throw new Error(`sign-up failed: ${res.status()}`);
 }
 
+/** Signs in an existing throwaway user (sign-ups are rate limited to 5 per minute). */
+export async function signIn(
+  request: APIRequestContext,
+  baseURL: string,
+  user: ReturnType<typeof throwawayUser>,
+) {
+  const res = await request.post("/api/auth/sign-in/email", {
+    data: { email: user.email, password: user.password },
+    headers: { origin: baseURL },
+  });
+  if (!res.ok()) throw new Error(`sign-in failed: ${res.status()}`);
+}
+
 /**
  * Deletes throwaway accounts created by the tests (cascades to projects and scans) and the
- * stored artifacts (screenshots, snapshots) of their scans.
+ * stored artifacts (screenshots, snapshots, uploaded documents) of their projects.
  */
 export async function deleteUsers(emails: string[]) {
   const client = new pg.Client({ connectionString: process.env.DATABASE_URL });
@@ -42,6 +55,10 @@ export async function deleteUsers(emails: string[]) {
        join "user" u on u.id = p.owner_id where u.email = any($1)`,
       [emails],
     );
+    const projects = await client.query<{ id: string }>(
+      `select p.id from project p join "user" u on u.id = p.owner_id where u.email = any($1)`,
+      [emails],
+    );
     await client.query('delete from "user" where email = any($1)', [emails]);
     const storageRoot = path.resolve(
       import.meta.dirname,
@@ -50,6 +67,9 @@ export async function deleteUsers(emails: string[]) {
     );
     for (const { id } of scans.rows)
       await rm(path.join(storageRoot, "scans", id), { recursive: true, force: true });
+    // Uploaded content documents and brand guidelines.
+    for (const { id } of projects.rows)
+      await rm(path.join(storageRoot, "projects", id), { recursive: true, force: true });
   } finally {
     await client.end();
   }

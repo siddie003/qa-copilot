@@ -55,3 +55,32 @@ export async function apiFetch<T>(
   }
   return data as T;
 }
+
+/** Uploads one file (multipart/form-data, field "file") plus optional text fields. */
+export async function apiUpload<T>(
+  path: string,
+  file: File,
+  fields: Record<string, string> = {},
+): Promise<T> {
+  const form = new FormData();
+  form.append("file", file);
+  for (const [k, v] of Object.entries(fields)) form.append(k, v);
+  let res: Response;
+  try {
+    res = await fetch(path, { method: "POST", body: form, credentials: "same-origin" });
+  } catch {
+    throw new ApiError(0, "Network error: the server could not be reached.");
+  }
+  const data = (await res.json().catch(() => ({}))) as {
+    detail?: string;
+    title?: string;
+    code?: string;
+  };
+  if (!res.ok)
+    throw new ApiError(
+      res.status,
+      data.detail ?? data.title ?? `Upload failed (${res.status})`,
+      data.code,
+    );
+  return data as T;
+}

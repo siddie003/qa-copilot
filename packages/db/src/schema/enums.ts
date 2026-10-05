@@ -45,6 +45,7 @@ export const referenceKindEnum = pgEnum("reference_kind", [
 
 export const referenceStatusEnum = pgEnum("reference_status", [
   "pending",
+  "processing",
   "ready",
   "failed",
   "unavailable",

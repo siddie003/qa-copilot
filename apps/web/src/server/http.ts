@@ -115,3 +115,43 @@ export function assertSameOrigin(req: Request, appUrl: string): void {
   if (origin && origin !== new URL(appUrl).origin)
     throw new AppError("FORBIDDEN", "Cross-origin request rejected");
 }
+
+export interface UploadedFile {
+  filename: string;
+  declaredType: string;
+  bytes: Buffer;
+  /** Other (text) form fields sent with the file. */
+  fields: Record<string, string>;
+}
+
+/**
+ * Reads a multipart/form-data request with one file in the `file` field. The declared size is
+ * checked before the body is read; the file itself is validated by the caller (type, content).
+ */
+export async function readUpload(req: Request, maxBytes: number): Promise<UploadedFile> {
+  if (!(req.headers.get("content-type") ?? "").toLowerCase().startsWith("multipart/form-data"))
+    throw validationError("Content-Type must be multipart/form-data");
+  const declared = Number(req.headers.get("content-length") ?? "0");
+  const limitMb = Math.round(maxBytes / 1024 / 1024);
+  if (declared > maxBytes + 64 * 1024)
+    throw new AppError("PAYLOAD_TOO_LARGE", `The file is larger than the ${limitMb} MB limit.`);
+  let form: FormData;
+  try {
+    form = await req.formData();
+  } catch {
+    throw validationError("The upload could not be read");
+  }
+  const file = form.get("file");
+  if (!(file instanceof File))
+    throw validationError("No file was uploaded", [{ path: "file", message: "Choose a file" }]);
+  if (file.size > maxBytes)
+    throw new AppError("PAYLOAD_TOO_LARGE", `The file is larger than the ${limitMb} MB limit.`);
+  const fields: Record<string, string> = {};
+  for (const [k, v] of form.entries()) if (typeof v === "string") fields[k] = v.slice(0, 2000);
+  return {
+    filename: file.name,
+    declaredType: file.type,
+    bytes: Buffer.from(await file.arrayBuffer()),
+    fields,
+  };
+}

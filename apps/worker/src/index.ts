@@ -11,6 +11,7 @@ import { checkDatabase, closeDb, getDb, getMigrationStatus, getPool } from "@qa/
 import { createLocalStorage } from "@qa/storage";
 import { boundPort, startHealthServer, type WorkerStatus } from "./health-server";
 import { startScanWorker, type ScanWorker } from "./pipeline/scan-worker";
+import { startReferenceWorker, type ReferenceWorker } from "./references/reference-worker";
 
 const DB_CHECK_INTERVAL_MS = 15_000;
 
@@ -33,6 +34,7 @@ async function main() {
   let database: WorkerStatus["database"] = { status: "pending" };
 
   let scanWorker: ScanWorker | undefined;
+  let referenceWorker: ReferenceWorker | undefined;
   let scanWorkerStarting = false;
   const ensureScanWorker = async () => {
     if (scanWorker || scanWorkerStarting) return;
@@ -47,10 +49,15 @@ async function main() {
         );
         return;
       }
+      const storage = createLocalStorage(config.storageDirAbsolute);
       scanWorker = await startScanWorker(
-        { db: getDb(), storage: createLocalStorage(config.storageDirAbsolute), config, log },
+        { db: getDb(), storage, config, log },
         config.DATABASE_URL,
         config.WORKER_CONCURRENCY,
+      );
+      referenceWorker = await startReferenceWorker(
+        { db: getDb(), storage, config, log },
+        config.DATABASE_URL,
       );
     } catch (err) {
       log.error(errorFields(err), "could not start scan worker; retrying on next database check");
@@ -92,6 +99,7 @@ async function main() {
           currentScanIds: scanWorker.currentScanIds(),
         }
       : { status: "not_started" },
+    referenceWorker: { status: referenceWorker ? "running" : "not_started" },
   });
 
   let server: http.Server | undefined;
@@ -109,9 +117,12 @@ async function main() {
     log.info({ signal }, "worker shutting down");
     clearInterval(dbTimer);
     // Lets the current page finish; an interrupted scan is marked failed on the next start.
-    await scanWorker
-      ?.stop()
-      .catch((err) => log.error(errorFields(err), "error stopping scan worker"));
+    await Promise.all([
+      scanWorker?.stop().catch((err) => log.error(errorFields(err), "error stopping scan worker")),
+      referenceWorker
+        ?.stop()
+        .catch((err) => log.error(errorFields(err), "error stopping reference worker")),
+    ]);
     await new Promise<void>((resolve) => (server ? server.close(() => resolve()) : resolve()));
     await closeDb().catch((err) => log.error(errorFields(err), "error closing database pool"));
     log.info("worker stopped");

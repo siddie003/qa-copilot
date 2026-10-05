@@ -65,6 +65,7 @@ test.describe("signed-in pages", () => {
     "/settings",
     `/projects/${projectId}`,
     `/projects/${projectId}/scan`,
+    `/projects/${projectId}/references`,
     `/projects/${projectId}/issues`,
     `/projects/${projectId}/pages`,
     `/projects/${projectId}/scanners`,

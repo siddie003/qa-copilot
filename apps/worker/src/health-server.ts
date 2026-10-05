@@ -11,6 +11,8 @@ export interface WorkerStatus {
   scanWorker?:
     | { status: "running"; workerId: string; concurrency: number; currentScanIds: string[] }
     | { status: "not_started" };
+  /** Processes content documents, Figma references and guideline documents. */
+  referenceWorker?: { status: "running" | "not_started" };
 }
 
 /**

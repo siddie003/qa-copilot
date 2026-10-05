@@ -56,6 +56,8 @@ function page(over: PageInput = {}): PageRecord {
     consoleMessages: [],
     requests: [],
     loadDom: async () => dom ?? null,
+    loadDesignStyles: async () => null,
+    loadTextContent: async () => null,
   });
   return Object.assign(defaults, rest, {
     captures: captures.map((c) => Object.assign(captureDefaults(), c)),
@@ -92,6 +94,7 @@ function ctx(pages: PageRecord[], over: Partial<ScannerContext> = {}): ScannerCo
     },
     pageTimeoutMs: 1000,
     log: () => {},
+    references: { designSpec: null, content: null },
     ...over,
   };
 }

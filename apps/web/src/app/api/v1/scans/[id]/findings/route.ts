@@ -1,4 +1,4 @@
-import { SCANNER_KEYS, SEVERITIES, notFound } from "@qa/core";
+import { FINDING_SOURCES, SEVERITIES, notFound } from "@qa/core";
 import { getDb, pipelineRepo } from "@qa/db";
 import { authedHandler } from "@/server/api";
 import { json } from "@/server/http";
@@ -18,7 +18,7 @@ export const GET = authedHandler<Params>(
     const scanner = q.get("scanner");
     const items = await pipelineRepo.listFindingsForScan(getDb(), user.id, id, {
       scanner:
-        scanner && (SCANNER_KEYS as readonly string[]).includes(scanner) ? scanner : undefined,
+        scanner && (FINDING_SOURCES as readonly string[]).includes(scanner) ? scanner : undefined,
       severity: q.getAll("severity").filter((s) => (SEVERITIES as readonly string[]).includes(s)),
     });
     if (!items) throw notFound("Scan");

@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
 import {
   authHeadersFor,
+  COMPARISON_KEYS,
   errorFields,
   SCANNER_KEYS,
+  specSelectors,
   scanAuthSchema,
   type AppConfig,
   type Logger,
@@ -25,8 +27,13 @@ import {
   type FetchOptions,
   type RobotsRules,
 } from "@qa/crawler";
-import { pipelineRepo, secretsRepo, type Database } from "@qa/db";
-import { SCANNERS, type ScannerContext } from "@qa/scanners";
+import { contentRepo, designSpecsRepo, pipelineRepo, secretsRepo, type Database } from "@qa/db";
+import {
+  COMPARISON_SCANNERS,
+  SCANNERS,
+  type ScannerContext,
+  type ScanReferences,
+} from "@qa/scanners";
 import {
   assertPublicTarget,
   BlockedTargetError,
@@ -83,12 +90,18 @@ interface ScanState {
   robots: RobotsRules | null;
   startFinalUrl: string | null;
   browser: BrowserSession | null;
+  references: ScanReferences;
 }
 
 /** Executes one claimed scan end to end. Never throws: all failures are recorded on the scan. */
 export async function runScan(
   rt: ScanRuntime,
-  scanRow: { id: string; projectId: string; configSnapshot: Record<string, unknown> },
+  scanRow: {
+    id: string;
+    projectId: string;
+    configSnapshot: Record<string, unknown>;
+    designSpecId?: string | null;
+  },
 ) {
   const snapshot = scanRow.configSnapshot as unknown as ScanConfigSnapshot;
   const log = rt.log.child({ scanId: scanRow.id });
@@ -109,6 +122,7 @@ export async function runScan(
     robots: null,
     startFinalUrl: null,
     browser: null,
+    references: { designSpec: null, content: null },
     fetchOpts: {
       policy,
       dispatcher,
@@ -209,6 +223,7 @@ export async function runScan(
 
   try {
     log.info({ websiteUrl: snapshot.websiteUrl }, "scan started");
+    state.references = await loadReferences(rt, scanRow.designSpecId ?? null, snapshot);
     await runStep("preflight", () => preflight(rt, state));
     await runStep("crawl", () => crawlStep(rt, state));
     await runStep("capture", () => captureStep(rt, state));
@@ -221,6 +236,15 @@ export async function runScan(
         await runStep(key, async () => {
           ctx ??= await buildScannerContext(env);
           return runScannerStep(env, SCANNERS[key], ctx);
+        });
+      }
+      // Reference comparisons run only when they were planned (the scan has references).
+      const planned = await pipelineRepo.pendingStepKeys(rt.db, scanRow.id);
+      for (const key of COMPARISON_KEYS) {
+        if (!planned.has(key)) continue;
+        await runStep(key, async () => {
+          ctx ??= await buildScannerContext(env);
+          return runScannerStep(env, COMPARISON_SCANNERS[key], ctx);
         });
       }
     }
@@ -244,6 +268,45 @@ export async function runScan(
     );
   }
   log.info({ durationMs: Date.now() - started, cancelled, fatal, anyFailed }, "scan finished");
+}
+
+/**
+ * Reference preparation: loads the design spec and content blocks frozen into the scan. Failures
+ * leave the reference empty; the comparison step then reports it as inconclusive.
+ */
+async function loadReferences(
+  rt: ScanRuntime,
+  designSpecId: string | null,
+  snapshot: ScanConfigSnapshot,
+): Promise<ScanReferences> {
+  const refs: ScanReferences = { designSpec: null, content: null };
+  try {
+    if (designSpecId) {
+      const row = await designSpecsRepo.getSpecById(rt.db, designSpecId);
+      if (row)
+        refs.designSpec = { id: row.id, version: row.version, spec: designSpecsRepo.specOf(row) };
+    }
+    const docs = snapshot.contentDocuments ?? [];
+    if (docs.length) {
+      const blocks = await contentRepo.loadBlocksForDocuments(
+        rt.db,
+        docs.map((d) => d.id),
+      );
+      const present = docs.filter((d) => blocks.some((b) => b.documentId === d.id));
+      refs.content = {
+        documents: present.map((d) => ({
+          id: d.id,
+          filename: d.filename,
+          targetPath: d.targetPath,
+          blocks: blocks.filter((b) => b.documentId === d.id),
+        })),
+        missing: docs.filter((d) => !present.includes(d)).map((d) => d.filename),
+      };
+    }
+  } catch (err) {
+    rt.log.error(errorFields(err), "loading scan references failed");
+  }
+  return refs;
 }
 
 /** Decrypts the project's site credentials. Returns a fatal outcome if they are unusable. */
@@ -382,6 +445,7 @@ function scannerEnv(rt: ScanRuntime, s: ScanState): ScannerEnv {
     fetch: { ...s.fetchOpts, signal: s.abort.signal },
     signal: s.abort.signal,
     pageTimeoutMs: s.snapshot.pageTimeoutMs,
+    references: s.references,
     openContext: (viewport) => openContext(rt, s, viewport),
   };
 }
@@ -508,6 +572,11 @@ async function captureStep(rt: ScanRuntime, s: ScanState): Promise<StepOutcome> 
   let ok = 0;
   let failed = 0;
   const failures: string[] = [];
+  // Reference data is collected only when the scan compares against references.
+  const design = s.references.designSpec
+    ? { selectors: specSelectors(s.references.designSpec.spec) }
+    : null;
+  const widest = Math.max(...s.snapshot.viewports.map((v) => v.width));
   // Viewports are captured in parallel, each in its own context (one page at a time per
   // context, so blocked-request evidence stays attributed to the right page).
   const lanes = await Promise.allSettled(
@@ -521,12 +590,20 @@ async function captureStep(rt: ScanRuntime, s: ScanState): Promise<StepOutcome> 
             timeoutMs: s.snapshot.pageTimeoutMs,
             screenshot: true,
             proxy: browser.proxy,
+            design,
+            text: Boolean(s.references.content) && viewport.width === widest,
           });
           const base = `scans/${s.scanId}/pages/${p.id}/${viewport.name}`;
           const screenshotKey = r.screenshot
             ? (await rt.storage.put(`${base}.png`, r.screenshot)).key
             : null;
           const domSnapshotKey = r.html ? (await rt.storage.put(`${base}.html`, r.html)).key : null;
+          const computedStylesKey = r.designStyles
+            ? (await rt.storage.put(`${base}.styles.json`, JSON.stringify(r.designStyles))).key
+            : null;
+          const textContentKey = r.textContent
+            ? (await rt.storage.put(`${base}.text.json`, JSON.stringify(r.textContent))).key
+            : null;
           await pipelineRepo.insertCapture(rt.db, {
             pageId: p.id,
             viewport: viewport.name,
@@ -534,6 +611,8 @@ async function captureStep(rt: ScanRuntime, s: ScanState): Promise<StepOutcome> 
             height: viewport.height,
             screenshotKey,
             domSnapshotKey,
+            computedStylesKey,
+            textContentKey,
             consoleMessages: [
               ...r.console.map((c) => ({ ...c })),
               ...r.pageErrors.map((e) => ({ type: "pageerror", text: e, location: null })),

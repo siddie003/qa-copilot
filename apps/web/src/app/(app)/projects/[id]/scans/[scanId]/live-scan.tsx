@@ -247,6 +247,15 @@ export function LiveScan({
                       {r.findingCount} finding{r.findingCount === 1 ? "" : "s"}
                     </Link>
                   )}
+                  {(r.stepKey === "design" || r.stepKey === "content") &&
+                    r.status === "completed" && (
+                      <Link
+                        href={`/projects/${projectId}/scans/${scan.id}/comparisons`}
+                        className="block text-xs font-medium text-primary hover:underline"
+                      >
+                        View comparison (matches and mismatches)
+                      </Link>
+                    )}
                   {r.toolName && (
                     <span className="block text-xs text-subtle">
                       {r.toolName}

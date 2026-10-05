@@ -57,7 +57,7 @@ export const responsiveScanner: Scanner = {
         {
           check: "Spacing, alignment and layout against the design",
           reason:
-            "Unable to verify without a processed design reference (design comparison: Phase 6)",
+            "Not part of this scanner: design values (typography, colors, component spacing) are compared by the design comparison step when the project has a confirmed design reference; free-form alignment against design frames cannot be verified",
           pageUrl: null,
         },
       ],

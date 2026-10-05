@@ -1,10 +1,14 @@
 "use client";
 
+import { CONTENT_ACCEPT, contentKindForFilename } from "@qa/core/content";
+import { countSpecValues, emptyDesignSpec, type DesignSpec } from "@qa/core/design-spec";
 import type { ScanDefaults, Viewport } from "@qa/core/domain";
 import { parseFigmaUrl } from "@qa/core/figma";
-import { Check, Play } from "lucide-react";
+import { Check, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
+import { DesignSpecEditor } from "@/components/references/design-spec-editor";
+import { ProcessingStatus } from "@/components/references/processing-status";
 import { Alert } from "@/components/ui/alert";
 import { Button, ButtonLink } from "@/components/ui/button";
 import {
@@ -15,8 +19,10 @@ import {
 } from "@/components/projects/site-auth-fields";
 import { Field, inputClasses } from "@/components/ui/field";
 import { useToast } from "@/components/ui/toast";
-import { ApiError, apiFetch } from "@/lib/api-client";
+import { ApiError, apiFetch, apiUpload } from "@/lib/api-client";
 import { cn } from "@/lib/cn";
+import { formatBytes } from "@/lib/format";
+import { StartScan } from "../[id]/scan/start-scan";
 
 const STEPS = [
   "Project",
@@ -30,9 +36,144 @@ const STEPS = [
 interface Props {
   defaults: ScanDefaults;
   scanners: Array<{ key: string; label: string }>;
+  maxUploadMb: number;
 }
 
-export function ProjectWizard({ defaults, scanners }: Props) {
+interface PendingFile {
+  id: number;
+  file: File;
+  targetPath: string;
+}
+
+let fileId = 0;
+
+/** Validates a file on the client (the server validates again, including its content). */
+function fileProblem(file: File, maxUploadMb: number): string | null {
+  if (!contentKindForFilename(file.name))
+    return `${file.name}: only PDF, DOCX, TXT and Markdown files are supported.`;
+  if (file.size > maxUploadMb * 1024 * 1024) return `${file.name}: larger than ${maxUploadMb} MB.`;
+  if (file.size === 0) return `${file.name}: the file is empty.`;
+  return null;
+}
+
+interface Status {
+  documents: Array<{
+    id: string;
+    filename: string;
+    parseStatus: string;
+    parseError: string | null;
+  }>;
+  draft: { version: number } | null;
+  active: { version: number } | null;
+}
+
+/** Final step: live processing status of what was uploaded, then Start QA Scan. */
+function Finish({
+  projectId,
+  name,
+  websiteUrl,
+  problems,
+  expectReferences,
+}: {
+  projectId: string;
+  name: string;
+  websiteUrl: string;
+  problems: string[];
+  expectReferences: boolean;
+}) {
+  const [status, setStatus] = useState<Status | null>(null);
+  useEffect(() => {
+    if (!expectReferences) return;
+    let stop = false;
+    const load = async () => {
+      try {
+        const [docs, spec] = await Promise.all([
+          apiFetch<{ items: Status["documents"] }>(
+            `/api/v1/projects/${projectId}/content-documents`,
+          ),
+          apiFetch<{ draft: Status["draft"]; active: Status["active"] }>(
+            `/api/v1/projects/${projectId}/design-spec`,
+          ),
+        ]);
+        if (!stop) setStatus({ documents: docs.items, draft: spec.draft, active: spec.active });
+      } catch {
+        /* status is informational; the References page shows it too */
+      }
+    };
+    void load();
+    const t = setInterval(load, 2500);
+    return () => {
+      stop = true;
+      clearInterval(t);
+    };
+  }, [projectId, expectReferences]);
+  const processing = status?.documents.some((d) => ["pending", "parsing"].includes(d.parseStatus));
+
+  return (
+    <div className="mt-5 space-y-5">
+      <Alert tone="success">Project “{name}” was created and saved.</Alert>
+      {problems.length > 0 && (
+        <Alert tone="error">
+          Some items could not be saved. Add them on the References page:
+          <ul className="mt-1 list-disc pl-4">
+            {problems.map((p) => (
+              <li key={p}>{p}</li>
+            ))}
+          </ul>
+        </Alert>
+      )}
+      {expectReferences && status && (
+        <div className="space-y-2 rounded-md border border-border p-4 text-sm">
+          <p className="font-medium">References</p>
+          <p className="text-muted">
+            {status.active
+              ? `Design reference version ${status.active.version} is confirmed.`
+              : status.draft
+                ? "Values extracted from Figma or the guideline are waiting for your review on the References page; they are used only after you confirm them."
+                : "No confirmed design reference yet (Figma links and guidelines are processed in the background)."}
+          </p>
+          {status.documents.length > 0 && (
+            <ul className="space-y-1">
+              {status.documents.map((d) => (
+                <li key={d.id} className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="break-all">{d.filename}</span>
+                  <ProcessingStatus status={d.parseStatus} />
+                  {d.parseError && (
+                    <span className="w-full text-xs text-danger">{d.parseError}</span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+          {processing && (
+            <p className="text-xs text-muted">
+              Documents still processing are not included in a scan started now.
+            </p>
+          )}
+          <Link href={`/projects/${projectId}/references`} className="text-primary hover:underline">
+            Open References
+          </Link>
+        </div>
+      )}
+      <div className="rounded-md border border-border p-4">
+        <StartScan projectId={projectId} websiteUrl={websiteUrl} />
+      </div>
+      <div className="flex gap-2">
+        <ButtonLink href={`/projects/${projectId}`} variant="secondary">
+          Open project
+        </ButtonLink>
+        <Link
+          href="/projects"
+          className="inline-flex items-center px-3 text-sm text-primary hover:underline"
+        >
+          All projects
+        </Link>
+      </div>
+    </div>
+  );
+}
+
+export function ProjectWizard({ defaults, scanners, maxUploadMb }: Props) {
   const toast = useToast();
   const [step, setStep] = useState(0);
   const headingRef = useRef<HTMLHeadingElement>(null);
@@ -44,6 +185,13 @@ export function ProjectWizard({ defaults, scanners }: Props) {
   const [websiteUrl, setWebsiteUrl] = useState<string | null>(null);
   // Step 2
   const [figmaUrl, setFigmaUrl] = useState("");
+  const [guideline, setGuideline] = useState<File | null>(null);
+  const [manualSpec, setManualSpec] = useState<DesignSpec | null>(null);
+  const [editorOpen, setEditorOpen] = useState(false);
+  const guidelineInput = useRef<HTMLInputElement>(null);
+  // Step 3
+  const [contentFiles, setContentFiles] = useState<PendingFile[]>([]);
+  const contentInput = useRef<HTMLInputElement>(null);
   // Step 4
   const [selectedScanners, setSelectedScanners] = useState<string[]>(defaults.scanners);
   const [viewports, setViewports] = useState<Viewport[]>(defaults.viewports);
@@ -54,8 +202,10 @@ export function ProjectWizard({ defaults, scanners }: Props) {
   const [authErrors, setAuthErrors] = useState<Record<string, string>>({});
 
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [fileErrors, setFileErrors] = useState<string[]>([]);
   const [pending, setPending] = useState(false);
   const [createdId, setCreatedId] = useState<string | null>(null);
+  const [saveProblems, setSaveProblems] = useState<string[]>([]);
 
   // Move focus to the step heading so keyboard and screen-reader users land on the new step.
   useEffect(() => {
@@ -92,12 +242,43 @@ export function ProjectWizard({ defaults, scanners }: Props) {
   }
 
   function nextFromFigma() {
+    const e: Record<string, string> = {};
     if (figmaUrl.trim()) {
       const r = parseFigmaUrl(figmaUrl);
-      if (!r.ok) return setErrors({ figmaUrl: r.message });
+      if (!r.ok) e.figmaUrl = r.message;
     }
-    setErrors({});
-    setStep(2);
+    if (guideline) {
+      const problem = fileProblem(guideline, maxUploadMb);
+      if (problem) e.guideline = problem;
+    }
+    setErrors(e);
+    if (!Object.keys(e).length) setStep(2);
+  }
+
+  function addContentFiles() {
+    const files = [...(contentInput.current?.files ?? [])];
+    const problems: string[] = [];
+    const ok: PendingFile[] = [];
+    for (const f of files) {
+      const p = fileProblem(f, maxUploadMb);
+      if (p) problems.push(p);
+      else ok.push({ id: ++fileId, file: f, targetPath: "" });
+    }
+    setFileErrors(problems);
+    setContentFiles((list) => [...list, ...ok]);
+    if (contentInput.current) contentInput.current.value = "";
+  }
+
+  function nextFromContent() {
+    const bad = contentFiles.find(
+      (f) => f.targetPath.trim() && !/^\/\S*$/.test(f.targetPath.trim()),
+    );
+    if (bad)
+      return setFileErrors([
+        `${bad.file.name}: the page must be a site path starting with /, e.g. /about.`,
+      ]);
+    setFileErrors([]);
+    setStep(3);
   }
 
   function nextFromConfig() {
@@ -145,21 +326,33 @@ export function ProjectWizard({ defaults, scanners }: Props) {
       });
       setCreatedId(project.id);
       toast.success(`Project “${name.trim()}” created.`);
+      // The project exists from here on; each follow-up item is saved independently.
+      const problems: string[] = [];
+      const message = (err: unknown) => (err instanceof ApiError ? err.message : "unknown error");
       const authPayload = toPayload(auth);
-      if (authPayload) {
-        try {
-          await apiFetch(`/api/v1/projects/${project.id}/scan-auth`, {
-            method: "PUT",
-            body: authPayload,
-          });
-        } catch (err) {
-          toast.error(
-            `The project was created, but the site credentials were not saved: ${
-              err instanceof ApiError ? err.message : "unknown error"
-            }. Add them in project settings.`,
-          );
-        }
-      }
+      if (authPayload)
+        await apiFetch(`/api/v1/projects/${project.id}/scan-auth`, {
+          method: "PUT",
+          body: authPayload,
+        }).catch((err) =>
+          problems.push(`Site credentials: ${message(err)} (add them in project settings)`),
+        );
+      if (manualSpec)
+        await apiFetch(`/api/v1/projects/${project.id}/design-spec`, {
+          method: "PUT",
+          body: manualSpec,
+        }).catch((err) => problems.push(`Design values: ${message(err)}`));
+      if (guideline)
+        await apiUpload(`/api/v1/projects/${project.id}/guideline-documents`, guideline).catch(
+          (err) => problems.push(`${guideline.name}: ${message(err)}`),
+        );
+      for (const f of contentFiles)
+        await apiUpload(
+          `/api/v1/projects/${project.id}/content-documents`,
+          f.file,
+          f.targetPath.trim() ? { targetPath: f.targetPath.trim() } : {},
+        ).catch((err) => problems.push(`${f.file.name}: ${message(err)}`));
+      setSaveProblems(problems);
       setStep(5);
     } catch (err) {
       const message = err instanceof ApiError ? err.message : "Project could not be created.";
@@ -176,6 +369,12 @@ export function ProjectWizard({ defaults, scanners }: Props) {
         ? vs.filter((x) => x.name !== v.name)
         : defaults.viewports.filter((d) => d.name === v.name || vs.some((x) => x.name === d.name)),
     );
+
+  const brandSummary = [
+    figmaUrl.trim() ? `Figma: ${figmaUrl.trim()}` : null,
+    guideline ? `Guideline: ${guideline.name}` : null,
+    manualSpec ? `${countSpecValues(manualSpec)} values entered manually` : null,
+  ].filter(Boolean);
 
   return (
     <div className="grid gap-6 lg:grid-cols-[14rem_1fr]">
@@ -215,7 +414,12 @@ export function ProjectWizard({ defaults, scanners }: Props) {
         })}
       </ol>
 
-      <section className="min-w-0 max-w-2xl rounded-lg border border-border bg-surface p-6">
+      <section
+        className={cn(
+          "min-w-0 rounded-lg border border-border bg-surface p-6",
+          step === 1 && editorOpen ? "max-w-5xl" : "max-w-2xl",
+        )}
+      >
         <h2 ref={headingRef} tabIndex={-1} className="text-lg font-semibold focus:outline-none">
           Step {step + 1} of {STEPS.length}: {STEPS[step]}
         </h2>
@@ -281,20 +485,15 @@ export function ProjectWizard({ defaults, scanners }: Props) {
         )}
 
         {step === 1 && (
-          <form
-            className="mt-5 space-y-5"
-            onSubmit={(e) => {
-              e.preventDefault();
-              nextFromFigma();
-            }}
-          >
+          <div className="mt-5 space-y-5">
             <p className="text-sm text-muted">
-              Link the Figma file the website was built from. Design values are extracted from it in
-              a later step; nothing is guessed. You can skip this and add it later.
+              The design the website should match. Use any combination: a Figma link, a brand
+              guideline document, or values entered by hand. Extracted values are drafts you review
+              before they are used; nothing is guessed. Everything is optional.
             </p>
             <Field
               label="Figma file link (optional)"
-              hint="For example https://www.figma.com/design/<file-key>/<name>"
+              hint="For example https://www.figma.com/design/<file-key>/<name>. Reading it needs a Figma access token (server or project setting)."
               error={errors.figmaUrl}
             >
               {({ id, describedBy, invalid }) => (
@@ -310,31 +509,143 @@ export function ProjectWizard({ defaults, scanners }: Props) {
                 />
               )}
             </Field>
-            <Alert tone="info">
-              Manual brand values and guideline document uploads, plus reading values from Figma,
-              are added in Phase 6. Until then, design comparison is reported as “Unable to verify”.
-            </Alert>
+            <Field
+              label="Brand guideline document (optional)"
+              hint={`PDF, DOCX, TXT or Markdown, up to ${maxUploadMb} MB. Values written literally (e.g. “Primary — #1A56DB”) are read with citations.`}
+              error={errors.guideline}
+            >
+              {({ id, describedBy, invalid }) => (
+                <input
+                  id={id}
+                  ref={guidelineInput}
+                  type="file"
+                  accept={CONTENT_ACCEPT}
+                  onChange={(e) => setGuideline(e.target.files?.[0] ?? null)}
+                  aria-describedby={describedBy}
+                  aria-invalid={invalid}
+                  className="block w-full text-sm file:mr-3 file:rounded-md file:border file:border-border-strong file:bg-surface file:px-3 file:py-1.5 file:text-sm file:font-medium"
+                />
+              )}
+            </Field>
+            <div className="rounded-md border border-border p-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-sm">
+                  <span className="font-medium">Manual values</span>{" "}
+                  <span className="text-muted">
+                    {manualSpec ? `· ${countSpecValues(manualSpec)} values set` : "· none"}
+                  </span>
+                </p>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  aria-expanded={editorOpen}
+                  onClick={() => setEditorOpen((o) => !o)}
+                >
+                  {editorOpen ? "Close editor" : manualSpec ? "Edit values" : "Enter values"}
+                </Button>
+              </div>
+              {editorOpen && (
+                <div className="mt-4">
+                  <DesignSpecEditor
+                    initial={manualSpec ?? emptyDesignSpec()}
+                    submitLabel="Use these values"
+                    onSubmit={(spec) => {
+                      setManualSpec(countSpecValues(spec) ? spec : null);
+                      setEditorOpen(false);
+                      toast.success(
+                        countSpecValues(spec)
+                          ? `${countSpecValues(spec)} design values will be saved with the project.`
+                          : "No manual values set.",
+                      );
+                    }}
+                  />
+                </div>
+              )}
+            </div>
             <div className="flex gap-2">
-              <Button type="submit">{figmaUrl.trim() ? "Continue" : "Skip for now"}</Button>
+              <Button onClick={nextFromFigma}>
+                {brandSummary.length ? "Continue" : "Skip for now"}
+              </Button>
               <Button variant="secondary" onClick={() => setStep(0)}>
                 Back
               </Button>
             </div>
-          </form>
+          </div>
         )}
 
         {step === 2 && (
           <div className="mt-5 space-y-5">
             <p className="text-sm text-muted">
-              Approved content documents (PDF, DOCX, TXT, Markdown) are compared against the text on
-              the website.
+              Approved content documents (PDF, DOCX, TXT, Markdown) are compared with the text on
+              the website. Optionally tell us which page a document describes; otherwise “Page: …”
+              markers in the document or its headings are used.
             </p>
-            <Alert tone="info">
-              Document upload and content extraction are not available yet (Phase 6). Without
-              approved content, content checks are reported as “Unable to verify”.
-            </Alert>
+            <div className="flex flex-wrap items-end gap-2">
+              <Field
+                label="Add documents"
+                hint={`Up to ${maxUploadMb} MB each.`}
+                className="min-w-64 flex-1"
+              >
+                {({ id, describedBy }) => (
+                  <input
+                    id={id}
+                    ref={contentInput}
+                    type="file"
+                    multiple
+                    accept={CONTENT_ACCEPT}
+                    onChange={addContentFiles}
+                    aria-describedby={describedBy}
+                    className="block w-full text-sm file:mr-3 file:rounded-md file:border file:border-border-strong file:bg-surface file:px-3 file:py-1.5 file:text-sm file:font-medium"
+                  />
+                )}
+              </Field>
+            </div>
+            {contentFiles.length > 0 && (
+              <ul className="divide-y divide-border rounded-md border border-border">
+                {contentFiles.map((f) => (
+                  <li key={f.id} className="flex flex-wrap items-center gap-3 px-3 py-2 text-sm">
+                    <span className="min-w-0 flex-1 break-all">
+                      {f.file.name}{" "}
+                      <span className="text-xs text-subtle">({formatBytes(f.file.size)})</span>
+                    </span>
+                    <input
+                      aria-label={`Website page for ${f.file.name} (optional)`}
+                      value={f.targetPath}
+                      onChange={(e) =>
+                        setContentFiles((list) =>
+                          list.map((x) =>
+                            x.id === f.id ? { ...x, targetPath: e.target.value } : x,
+                          ),
+                        )
+                      }
+                      placeholder="Page, e.g. /about"
+                      className={cn(inputClasses, "h-8 w-40 px-2 font-mono text-sm")}
+                    />
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      aria-label={`Remove ${f.file.name}`}
+                      onClick={() => setContentFiles((list) => list.filter((x) => x.id !== f.id))}
+                    >
+                      <Trash2 aria-hidden className="size-4" />
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {fileErrors.length > 0 && (
+              <Alert tone="error">
+                <ul className="list-disc pl-4">
+                  {fileErrors.map((e) => (
+                    <li key={e}>{e}</li>
+                  ))}
+                </ul>
+              </Alert>
+            )}
             <div className="flex gap-2">
-              <Button onClick={() => setStep(3)}>Continue without content</Button>
+              <Button onClick={nextFromContent}>
+                {contentFiles.length ? "Continue" : "Continue without content"}
+              </Button>
               <Button variant="secondary" onClick={() => setStep(1)}>
                 Back
               </Button>
@@ -352,7 +663,10 @@ export function ProjectWizard({ defaults, scanners }: Props) {
           >
             <fieldset>
               <legend className="text-sm font-medium">Scanners</legend>
-              <p className="text-xs text-subtle">All six are enabled by default.</p>
+              <p className="text-xs text-subtle">
+                All six are enabled by default. Design and content comparisons run automatically
+                when references exist.
+              </p>
               <div className="mt-2 grid gap-2 sm:grid-cols-2">
                 {scanners.map((s) => (
                   <label key={s.key} className="flex items-center gap-2 text-sm">
@@ -466,8 +780,25 @@ export function ProjectWizard({ defaults, scanners }: Props) {
               {[
                 ["Project", name.trim(), 0],
                 ["Website", websiteUrl ?? websiteInput, 0],
-                ["Figma / brand", figmaUrl.trim() || "None (design checks: unable to verify)", 1],
-                ["Content", "None (content checks: unable to verify)", 2],
+                [
+                  "Figma / brand",
+                  brandSummary.length
+                    ? brandSummary.join(" · ")
+                    : "None (design checks: unable to verify)",
+                  1,
+                ],
+                [
+                  "Content",
+                  contentFiles.length
+                    ? contentFiles
+                        .map(
+                          (f) =>
+                            `${f.file.name}${f.targetPath.trim() ? ` → ${f.targetPath.trim()}` : ""}`,
+                        )
+                        .join(", ")
+                    : "None (content checks: unable to verify)",
+                  2,
+                ],
                 [
                   "Scanners",
                   scanners
@@ -528,28 +859,15 @@ export function ProjectWizard({ defaults, scanners }: Props) {
         )}
 
         {step === 5 && createdId && (
-          <div className="mt-5 space-y-5">
-            <Alert tone="success">Project “{name.trim()}” was created and saved.</Alert>
-            <div className="rounded-md border border-border p-4">
-              <Button disabled aria-describedby="wizard-scan-note">
-                <Play aria-hidden className="size-4" />
-                Start QA Scan
-              </Button>
-              <p id="wizard-scan-note" className="mt-2 text-sm text-muted">
-                Scanning is not available yet. The crawler, browser automation and scanners are
-                built in Phases 4–5; this button is disabled rather than simulated.
-              </p>
-            </div>
-            <div className="flex gap-2">
-              <ButtonLink href={`/projects/${createdId}`}>Open project</ButtonLink>
-              <Link
-                href="/projects"
-                className="inline-flex items-center px-3 text-sm text-primary hover:underline"
-              >
-                All projects
-              </Link>
-            </div>
-          </div>
+          <Finish
+            projectId={createdId}
+            name={name.trim()}
+            websiteUrl={websiteUrl ?? websiteInput}
+            problems={saveProblems}
+            expectReferences={Boolean(
+              figmaUrl.trim() || guideline || manualSpec || contentFiles.length,
+            )}
+          />
         )}
       </section>
     </div>

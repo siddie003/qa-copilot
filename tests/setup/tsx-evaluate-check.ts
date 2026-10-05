@@ -14,14 +14,18 @@ const { context, guard } = await newGuardedContext(session, {
 const r = await capturePage(context, guard, site.url, viewport, {
   timeoutMs: 15_000,
   screenshot: true,
+  design: { selectors: [".btn-primary"] },
+  text: true,
 });
 await session.close();
 await site.close();
-if (r.error || !r.screenshot || !r.timings.loadMs) {
-  console.error("FAIL", r.error, r.timings);
+if (r.error || !r.screenshot || !r.timings.loadMs || !r.designStyles || !r.textContent) {
+  console.error("FAIL", r.error, r.timings, Boolean(r.designStyles), Boolean(r.textContent));
   process.exit(1);
 }
 console.log("OK: capture works under tsx", {
   loadMs: r.timings.loadMs,
   bytes: r.screenshot.length,
+  designRoles: Object.keys((r.designStyles.roles as object) ?? {}).length,
+  textBlocks: (r.textContent.blocks as unknown[]).length,
 });

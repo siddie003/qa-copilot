@@ -15,8 +15,13 @@
     "@qa/crawler": "0.1.0",
     "axe-core": "^4.13.0",
     "cheerio": "^1.2.0",
+    "culori": "^4.0.2",
+    "diff": "^9.0.0",
     "fast-xml-parser": "^5.11.2",
     "playwright": "^1.63.0",
     "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/culori": "^4.0.1"
   }
 }

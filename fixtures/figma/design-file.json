@@ -1,0 +1,247 @@
+{
+  "name": "Demo Store – Design System",
+  "lastModified": "2026-09-30T10:00:00Z",
+  "version": "4242",
+  "document": {
+    "id": "0:0",
+    "name": "Document",
+    "type": "DOCUMENT",
+    "children": [
+      {
+        "id": "0:1",
+        "name": "Styles",
+        "type": "CANVAS",
+        "children": [
+          {
+            "id": "1:10",
+            "name": "Heading 1 sample",
+            "type": "TEXT",
+            "styles": { "text": "S:h1", "fill": "S:ink" },
+            "style": {
+              "fontFamily": "Georgia",
+              "fontWeight": 700,
+              "fontSize": 48,
+              "lineHeightPx": 56,
+              "lineHeightUnit": "PIXELS",
+              "letterSpacing": 0
+            },
+            "fills": [
+              { "type": "SOLID", "color": { "r": 0.10196, "g": 0.10196, "b": 0.18039, "a": 1 } }
+            ]
+          },
+          {
+            "id": "1:11",
+            "name": "Heading 2 sample",
+            "type": "TEXT",
+            "styles": { "text": "S:h2" },
+            "style": {
+              "fontFamily": "Georgia",
+              "fontWeight": 700,
+              "fontSize": 32,
+              "lineHeightPx": 40,
+              "lineHeightUnit": "PIXELS",
+              "letterSpacing": 0
+            },
+            "fills": [
+              { "type": "SOLID", "color": { "r": 0.10196, "g": 0.10196, "b": 0.18039, "a": 1 } }
+            ]
+          },
+          {
+            "id": "1:12",
+            "name": "Body sample",
+            "type": "TEXT",
+            "styles": { "text": "S:body", "fill": "S:text" },
+            "style": {
+              "fontFamily": "Inter",
+              "fontWeight": 400,
+              "fontSize": 16,
+              "lineHeightPx": 24,
+              "lineHeightUnit": "PIXELS",
+              "letterSpacing": 0
+            },
+            "fills": [
+              { "type": "SOLID", "color": { "r": 0.13333, "g": 0.13333, "b": 0.13333, "a": 1 } }
+            ]
+          },
+          {
+            "id": "1:13",
+            "name": "Body large sample",
+            "type": "TEXT",
+            "styles": { "text": "S:body-lg" },
+            "style": {
+              "fontFamily": "Inter",
+              "fontWeight": 400,
+              "fontSize": 20,
+              "lineHeightPx": 30,
+              "lineHeightUnit": "PIXELS",
+              "letterSpacing": 0
+            },
+            "fills": [
+              { "type": "SOLID", "color": { "r": 0.13333, "g": 0.13333, "b": 0.13333, "a": 1 } }
+            ]
+          },
+          {
+            "id": "1:14",
+            "name": "Caption sample",
+            "type": "TEXT",
+            "styles": { "text": "S:caption" },
+            "style": {
+              "fontFamily": "Inter",
+              "fontWeight": 400,
+              "fontSize": 12,
+              "lineHeightUnit": "INTRINSIC_%"
+            },
+            "fills": [{ "type": "SOLID", "color": { "r": 0.4, "g": 0.4, "b": 0.4, "a": 1 } }]
+          },
+          {
+            "id": "1:20",
+            "name": "Link swatch",
+            "type": "RECTANGLE",
+            "styles": { "fill": "S:link" },
+            "fills": [
+              { "type": "SOLID", "color": { "r": 0.10196, "g": 0.33725, "b": 0.85882, "a": 1 } }
+            ]
+          },
+          {
+            "id": "1:21",
+            "name": "Header swatch",
+            "type": "RECTANGLE",
+            "styles": { "fill": "S:header" },
+            "fills": [
+              { "type": "SOLID", "color": { "r": 0.88627, "g": 0.9098, "b": 0.94118, "a": 1 } }
+            ]
+          },
+          {
+            "id": "1:22",
+            "name": "Accent swatch",
+            "type": "RECTANGLE",
+            "styles": { "fill": "S:accent" },
+            "fills": [
+              {
+                "type": "SOLID",
+                "color": { "r": 0.88235, "g": 0.11373, "b": 0.28235, "a": 1 },
+                "opacity": 0.5
+              }
+            ]
+          },
+          {
+            "id": "1:23",
+            "name": "Unused hidden fill",
+            "type": "RECTANGLE",
+            "styles": { "fill": "S:hidden" },
+            "fills": [
+              { "type": "SOLID", "visible": false, "color": { "r": 0, "g": 0, "b": 0, "a": 1 } }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "0:2",
+        "name": "Components",
+        "type": "CANVAS",
+        "children": [
+          {
+            "id": "2:1",
+            "name": "Button",
+            "type": "COMPONENT_SET",
+            "children": [
+              {
+                "id": "2:2",
+                "name": "Variant=Primary, State=Hover",
+                "type": "COMPONENT",
+                "cornerRadius": 8,
+                "paddingLeft": 24,
+                "paddingRight": 24,
+                "paddingTop": 12,
+                "paddingBottom": 12,
+                "fills": [{ "type": "SOLID", "color": { "r": 0.08, "g": 0.26, "b": 0.7, "a": 1 } }],
+                "children": []
+              },
+              {
+                "id": "2:3",
+                "name": "Variant=Primary, State=Default",
+                "type": "COMPONENT",
+                "cornerRadius": 8,
+                "paddingLeft": 24,
+                "paddingRight": 24,
+                "paddingTop": 12,
+                "paddingBottom": 12,
+                "fills": [
+                  { "type": "SOLID", "color": { "r": 0.10196, "g": 0.33725, "b": 0.85882, "a": 1 } }
+                ],
+                "children": [
+                  {
+                    "id": "2:4",
+                    "name": "Label",
+                    "type": "TEXT",
+                    "style": { "fontFamily": "Inter", "fontWeight": 600, "fontSize": 16 },
+                    "fills": [{ "type": "SOLID", "color": { "r": 1, "g": 1, "b": 1, "a": 1 } }]
+                  }
+                ]
+              },
+              {
+                "id": "2:5",
+                "name": "Variant=Secondary, State=Default",
+                "type": "COMPONENT",
+                "cornerRadius": 8,
+                "paddingLeft": 20,
+                "paddingRight": 24,
+                "paddingTop": 12,
+                "paddingBottom": 12,
+                "fills": [{ "type": "SOLID", "color": { "r": 1, "g": 1, "b": 1, "a": 1 } }],
+                "children": []
+              }
+            ]
+          },
+          {
+            "id": "2:9",
+            "name": "Icon button",
+            "type": "COMPONENT",
+            "fills": [],
+            "children": []
+          }
+        ]
+      },
+      {
+        "id": "0:3",
+        "name": "Home",
+        "type": "CANVAS",
+        "children": [
+          {
+            "id": "3:1",
+            "name": "Desktop",
+            "type": "FRAME",
+            "absoluteBoundingBox": { "x": 0, "y": 0, "width": 1440, "height": 2000 },
+            "children": [
+              {
+                "id": "3:2",
+                "name": "Container",
+                "type": "FRAME",
+                "absoluteBoundingBox": { "x": 120, "y": 0, "width": 1200, "height": 2000 },
+                "children": []
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "styles": {
+    "S:h1": { "key": "k1", "name": "Heading/H1", "styleType": "TEXT", "description": "" },
+    "S:h2": { "key": "k2", "name": "Heading/H2", "styleType": "TEXT", "description": "" },
+    "S:body": { "key": "k3", "name": "Body/Regular", "styleType": "TEXT", "description": "" },
+    "S:body-lg": { "key": "k4", "name": "Body/Large", "styleType": "TEXT", "description": "" },
+    "S:caption": { "key": "k5", "name": "Caption", "styleType": "TEXT", "description": "" },
+    "S:ink": { "key": "k6", "name": "Ink/Heading", "styleType": "FILL", "description": "" },
+    "S:text": { "key": "k7", "name": "Text/Primary", "styleType": "FILL", "description": "" },
+    "S:link": { "key": "k8", "name": "Link/Default", "styleType": "FILL", "description": "" },
+    "S:header": {
+      "key": "k9",
+      "name": "Header/Background",
+      "styleType": "FILL",
+      "description": ""
+    },
+    "S:accent": { "key": "k10", "name": "Accent/Rose 50%", "styleType": "FILL", "description": "" },
+    "S:hidden": { "key": "k11", "name": "Hidden", "styleType": "FILL", "description": "" }
+  }
+}

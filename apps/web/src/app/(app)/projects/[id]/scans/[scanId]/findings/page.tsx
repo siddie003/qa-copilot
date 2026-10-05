@@ -1,4 +1,4 @@
-import { AppError, SCANNER_KEYS, SCANNER_LABELS, SEVERITIES } from "@qa/core";
+import { AppError, FINDING_SOURCE_LABELS, FINDING_SOURCES, SEVERITIES } from "@qa/core";
 import { getDb, pipelineRepo } from "@qa/db";
 import { SearchCheck } from "lucide-react";
 import type { Metadata } from "next";
@@ -48,7 +48,7 @@ export default async function FindingsPage({
   if (scan.projectId !== project.id) notFound();
 
   const scanner =
-    typeof q.scanner === "string" && (SCANNER_KEYS as readonly string[]).includes(q.scanner)
+    typeof q.scanner === "string" && (FINDING_SOURCES as readonly string[]).includes(q.scanner)
       ? q.scanner
       : "";
   const severity = (Array.isArray(q.severity) ? q.severity : q.severity ? [q.severity] : []).filter(
@@ -64,7 +64,7 @@ export default async function FindingsPage({
   const totalAll = counts.reduce((s, c) => s + c.n, 0);
   const base = `/projects/${project.id}/scans/${scanId}/findings`;
   const scannerRuns = scan.runs.filter((r) =>
-    (SCANNER_KEYS as readonly string[]).includes(r.stepKey),
+    (FINDING_SOURCES as readonly string[]).includes(r.stepKey),
   );
 
   return (
@@ -97,9 +97,9 @@ export default async function FindingsPage({
           </label>
           <select id="f-scanner" name="scanner" defaultValue={scanner} className={inputClasses}>
             <option value="">All scanners</option>
-            {SCANNER_KEYS.map((k) => (
+            {FINDING_SOURCES.map((k) => (
               <option key={k} value={k}>
-                {SCANNER_LABELS[k]}
+                {FINDING_SOURCE_LABELS[k]}
               </option>
             ))}
           </select>
@@ -159,7 +159,7 @@ export default async function FindingsPage({
                   <dl className="grid gap-2 sm:grid-cols-[9rem_1fr]">
                     <dt className="text-muted">Scanner / rule</dt>
                     <dd>
-                      {SCANNER_LABELS[f.scanner as keyof typeof SCANNER_LABELS] ?? f.scanner} ·{" "}
+                      {FINDING_SOURCE_LABELS[f.scanner] ?? f.scanner} ·{" "}
                       <code className="font-mono text-xs">{f.ruleId}</code>
                     </dd>
                     <dt className="text-muted">Page</dt>
@@ -218,7 +218,7 @@ export default async function FindingsPage({
             return (
               <div key={r.id}>
                 <h3 className="text-sm font-medium">
-                  {SCANNER_LABELS[r.stepKey as keyof typeof SCANNER_LABELS]}{" "}
+                  {FINDING_SOURCE_LABELS[r.stepKey]}{" "}
                   <span className="font-normal text-muted">
                     · {r.status}
                     {typeof c.evaluated === "number" ? ` · ${c.evaluated} checks evaluated` : ""}

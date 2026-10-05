@@ -11,6 +11,8 @@ export * as reportsRepo from "./repositories/reports";
 export * as referencesRepo from "./repositories/references";
 export * as pipelineRepo from "./repositories/pipeline";
 export * as secretsRepo from "./repositories/secrets";
+export * as designSpecsRepo from "./repositories/design-specs";
+export * as contentRepo from "./repositories/content";
 export type { IssueCounts, LastScanSummary, ProjectSummary } from "./repositories/projects";
 export type { DashboardSummary } from "./repositories/dashboard";
 export type { ScanListItem, ScannerRunRow } from "./repositories/scans";

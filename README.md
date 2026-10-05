@@ -4,7 +4,7 @@ AI-powered website QA, design and brand compliance platform. You provide a desig
 (Figma or brand guidelines), approved content and a website URL; QA Copilot crawls the site,
 runs evidence-based QA scanners, and turns the findings into developer-ready issues and reports.
 
-> **Status:** Phase 5 (six QA scanners). Figma/content comparison follows in Phase 6. See [PROJECT_STATUS.md](PROJECT_STATUS.md) and
+> **Status:** Phase 6 (design and content references + comparison). AI analysis follows in Phase 7. See [PROJECT_STATUS.md](PROJECT_STATUS.md) and
 > [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). A full README (Docker, deployment, scanners, AI
 > configuration) is completed in Phase 10.
 
@@ -70,10 +70,41 @@ rendered DOM, network, console, lab Core Web Vitals, layout measurements) → si
 | Performance | LCP, CLS, TBT (approx.), TTFB, FCP vs Google thresholds; page weight, JS/CSS, large/oversized images, render-blocking | Chromium performance APIs |
 | Responsive / visual | Horizontal overflow, clipped text, overlapping controls, touch targets, small text, images; live mobile-menu test | built-in |
 
-Every finding carries evidence (HTML snippet, headers, measurements, screenshots). Checks that
-cannot be verified are listed as such, never reported as passes or problems. Findings are shown
-on the scan page and its findings view. AI grouping, design/content comparison and reports are
-shown as "skipped" with the phase that implements them.
+After the scanners, two reference comparisons run when the project has references:
+
+| Comparison | Compares | Verdicts |
+|---|---|---|
+| Design | The confirmed design reference (typography, colors with roles, buttons, container width) with computed styles of the mapped elements (explicit CSS selector > semantic HTML > class-name heuristics); colors by CIEDE2000 ΔE (≤ 2 match, 2–5 needs review, > 5 differs), sizes ±0.5px | match · confirmed mismatch · potential mismatch · unable to verify |
+| Content | Approved content blocks with the visible text of the mapped page (page mapping > “Page:/URL:” marker > page name > heading similarity); exact, changed wording (≥ 0.85 similarity, word diff), rewritten, missing, capitalization, CTA text and link target | match · confirmed mismatch · potential mismatch · unable to verify |
+
+Every finding carries evidence (HTML snippet, headers, measurements, screenshots, computed styles,
+word diffs with document citations). Checks that cannot be verified are listed as such, never
+reported as passes or problems. Findings are shown on the scan page and its findings view; every
+compared reference value (matches included) is listed on the scan's **comparison** page. AI
+grouping and reports are shown as "skipped" with the phase that implements them.
+
+## Design references and approved content
+
+Open a project's **References** tab (or use the setup wizard):
+
+- **Figma**: add a file or frame link. With a Figma personal access token (`FIGMA_ACCESS_TOKEN`
+  or a per-project token saved encrypted on the References page), the worker reads local text
+  styles, color styles, Button components (Primary/Secondary variants) and a frame named
+  “Container”. Every value records the Figma node it came from.
+- **Brand guideline** (PDF, DOCX, TXT, Markdown): values written literally (e.g.
+  “Primary — #1A56DB”, “H1 — Georgia Bold, 48px / 56px”) are extracted with page/line citations.
+- **Manual values / JSON**: the token editor, with JSON import and export.
+
+Extracted values (Figma, guideline) become a **draft**: review each change with its source, then
+confirm or discard it. Manually entered values are never overwritten by extraction. Scans use the
+newest confirmed version; each scan records the version it used.
+
+**Approved content** documents (PDF, DOCX, TXT, Markdown, up to `MAX_UPLOAD_MB`) are validated
+(extension, type, content, zip-bomb guard), stored under random keys and parsed by the worker into
+blocks (headings, paragraphs, list items, links, CTAs). Map a document to a page (e.g. `/about`),
+or use markers inside it: a line `Page: About`, `URL: /about` or `<!-- page: /about -->` applies
+to the following blocks; `CTA: Text → /path` or `CTA: [Text](/path)` declares a call to action.
+Scanned (image-only) PDFs are reported as unreadable (no OCR).
 
 Login-protected sites: add site credentials in project settings (HTTP Basic, a custom header or
 cookies). They are encrypted with `ENCRYPTION_KEY` and sent to the scanned site only.
@@ -113,7 +144,15 @@ All `/api/v1` endpoints except health checks require a session cookie (sign in v
 | DELETE | `/api/v1/projects/:id` | Soft delete |
 | POST | `/api/v1/projects/validate-url` | Check and normalize a website URL `{ websiteUrl }` |
 | GET | `/api/v1/projects/:id/references` | Design references of a project |
-| POST | `/api/v1/projects/:id/references` | Add a Figma link `{ figmaUrl }` (stored as pending) |
+| POST | `/api/v1/projects/:id/references` | Add a Figma link `{ figmaUrl }` (queued for the worker) |
+| POST/DELETE | `/api/v1/projects/:id/references/:refId/refresh`, `/references/:refId` | Fetch/extract again, remove |
+| GET/PUT | `/api/v1/projects/:id/design-spec` | Active spec, draft (with changes) and history; save values as a new confirmed version |
+| POST/DELETE | `/api/v1/projects/:id/design-spec/draft/confirm` `{ version }`, `/design-spec/draft` | Confirm or discard the pending draft |
+| POST | `/api/v1/projects/:id/guideline-documents` | Upload a brand guideline (multipart `file`) |
+| GET/POST | `/api/v1/projects/:id/content-documents` | List or upload content documents (multipart `file`, optional `targetPath`) |
+| PATCH/DELETE | `/api/v1/content-documents/:id` | Set the page mapping `{ targetPath }`, delete |
+| GET/POST | `/api/v1/content-documents/:id/blocks`, `/retry` | Extracted blocks; retry a failed document |
+| PUT/DELETE | `/api/v1/projects/:id/figma-token` | Store (encrypted, write-only) or remove the project's Figma token |
 | GET | `/api/v1/dashboard/summary` | Dashboard figures computed from stored records |
 | GET/PUT/DELETE | `/api/v1/projects/:id/scan-auth` | Site credentials (write-only; GET returns a summary) |
 | POST | `/api/v1/projects/:id/scans` | Start a scan `{ authorizationAttested: true }` |
@@ -164,15 +203,19 @@ npm run smoke:phase2 -- verify    # checks data persisted, then cleans up
 
 ```
 apps/web           Next.js UI, auth, /api/v1 route handlers
-apps/worker        Scan worker: claims queued scans and runs the pipeline
+apps/worker        Scan worker (claims queued scans, runs the pipeline) and reference worker
+                   (parses documents, reads Figma, extracts guideline drafts)
 packages/core      Config validation, logging, error model, domain schemas
 packages/db        Drizzle schema (24 tables), migrations, repositories, health check
 packages/security  URL validation, DNS/connect-time SSRF guard, safe redirects
 packages/crawler   HTTP fetcher, URL normalization, robots.txt, crawl loop, technology detection
 packages/browser   Playwright capture with an in-browser network guard
 packages/storage   Artifact storage (screenshots, HTML snapshots)
-packages/scanners  The six QA scanners (contract, registry, rules)
+packages/scanners  The six QA scanners plus design and content comparison
+packages/reference Document extraction (PDF/DOCX/TXT/MD), Figma client + normalizer, guideline extraction
 fixtures/demo-site Controlled test website (see its README)
+fixtures/documents Design spec + approved content for the fixture; real DOCX/PDF builders
+fixtures/figma     Figma REST response used by tests
 scripts/           Environment and database bootstrap scripts
 tests/             Integration test setup, HTTP smoke tests
 docs/              Architecture and design documents

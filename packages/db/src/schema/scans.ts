@@ -113,7 +113,10 @@ export const pageCapture = pgTable(
     height: integer().notNull(),
     screenshotKey: text(),
     domSnapshotKey: text(),
+    /** Computed styles of design roles (collected only when the scan has a design reference). */
     computedStylesKey: text(),
+    /** Visible text blocks and links (collected only when the scan has content documents). */
+    textContentKey: text(),
     consoleMessages: jsonb().$type<Array<Record<string, unknown>>>(),
     timings: jsonb().$type<Record<string, unknown>>(),
     /** In-page measurements: web vitals, layout (overflow, overlaps, tap targets), images. */

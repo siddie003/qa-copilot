@@ -7,6 +7,7 @@ import {
   type CaptureRecord,
   type LivePage,
   type PageRecord,
+  type ScanReferences,
   type Scanner,
   type ScannerContext,
 } from "@qa/scanners";
@@ -34,6 +35,8 @@ export interface ScannerEnv {
   fetch: FetchOptions;
   signal: AbortSignal;
   pageTimeoutMs: number;
+  /** Design spec and content documents frozen into the scan. */
+  references: ScanReferences;
   /** Guarded browser context (policy + credentials) for one viewport. */
   openContext(viewport: {
     name: string;
@@ -49,6 +52,16 @@ const readText = (storage: Storage, key: string | null) => async () =>
         .then((b) => b.toString("utf8"))
         .catch(() => null)
     : null;
+
+const readJson = (storage: Storage, key: string | null) => async () => {
+  const text = await readText(storage, key)();
+  if (!text) return null;
+  try {
+    return JSON.parse(text) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+};
 
 /** Builds the read-only scanner context from what crawl and capture stored. */
 export async function buildScannerContext(env: ScannerEnv): Promise<ScannerContext> {
@@ -95,6 +108,8 @@ export async function buildScannerContext(env: ScannerEnv): Promise<ScannerConte
           isMixedContent: r.isMixedContent,
         })),
         loadDom: readText(env.storage, c.domSnapshotKey),
+        loadDesignStyles: readJson(env.storage, c.computedStylesKey),
+        loadTextContent: readJson(env.storage, c.textContentKey),
       })),
   }));
 
@@ -107,6 +122,7 @@ export async function buildScannerContext(env: ScannerEnv): Promise<ScannerConte
     fetch: env.fetch,
     signal: env.signal,
     pageTimeoutMs: env.pageTimeoutMs,
+    references: env.references,
     log: (msg, data) => env.log.info(data ?? {}, msg),
     async openPage(url, viewport): Promise<LivePage> {
       const { context } = await env.openContext(viewport);
@@ -213,6 +229,7 @@ export async function runScannerStep(
       inconclusive: result.checks.inconclusive.slice(0, 200),
       inconclusiveTotal: result.checks.inconclusive.length,
       notes: result.checks.notes ?? [],
+      ...(result.checks.comparison ? { comparison: result.checks.comparison } : {}),
     },
   };
 }

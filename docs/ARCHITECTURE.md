@@ -22,6 +22,20 @@ Status: **Draft for approval** · Date: 2026-10-03 · Phase: 0 (no functional co
 ---
 
 > **Amendments during implementation**
+> - Phase 6: `packages/reference` holds document extraction (PDF via unpdf with font-size heading
+>   recovery, DOCX via mammoth, Markdown via mdast, TXT), the Figma REST client/normalizer and the
+>   guideline extractor. Guideline extraction is **deterministic** (only literal values, cited by
+>   page/line); AI-assisted extraction can be added in Phase 7. Figma and guideline results become
+>   **drafts** that the user confirms; manual values are never overwritten by extraction. Parsing
+>   and Figma reads run in a separate **reference worker loop** in `apps/worker` (content
+>   documents and reference sources are the jobs, claimed with SKIP LOCKED; LISTEN
+>   `reference_queued`), never in the web process. Capture collects computed styles of design roles
+>   (`page_capture.computed_styles_key`, all viewports) and visible text (`text_content_key`, widest
+>   viewport) only when the scan has references. Design/content comparisons are steps after the six
+>   scanners; without references they are created as `skipped` with an "unable to verify" reason.
+>   Every compared value (matches included) is stored in `scanner_run.checks.comparison`; only
+>   mismatches become findings. Content markers: `Page:`/`URL:` lines and `<!-- page: -->`
+>   comments; `CTA:` lines. Visual (pixel) diff against Figma frames was not implemented.
 > - Phase 5: scanners live in `packages/scanners`, consume stored crawl/capture data through a
 >   read-only `ScannerContext` (plus `openPage` for live checks: axe, keyboard focus, mobile menu)
 >   and return validated findings (zod, evidence required). Lab Core Web Vitals and layout metrics

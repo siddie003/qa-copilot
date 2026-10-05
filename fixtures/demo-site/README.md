@@ -50,3 +50,39 @@ Run: `npm run demo:site` (http://localhost:4100). `localhost:4100` is in the def
 
 No framework or CMS signals are served, so technology detection reports "Could not determine"
 (the `Server` header is reported separately as server software).
+
+## Design and content references
+
+`fixtures/documents/design-spec.json` (design reference) and
+`fixtures/documents/approved-content.md` (approved content) describe what the site *should* look
+like and say. The site differs from them on purpose; the expected comparison results are asserted
+by the pipeline integration test and the references end-to-end test.
+
+### Design (`/assets/site.css` vs `design-spec.json`)
+
+| Reference value | Site | Expected verdict |
+|---|---|---|
+| H1 Georgia, 700, #1A1A2E | same | match |
+| H1 48px | 40px | confirmed mismatch (compared at the widest viewport) |
+| Body text Inter | system-ui | confirmed mismatch |
+| Body 16px, text #222222, page #FFFFFF | same | match |
+| Text #222222 | `/products` paragraph is #C4C4C4 | confirmed mismatch |
+| Link #1A56DB | #0645AD (ΔE 7.86) | confirmed mismatch |
+| Header background #E2E8F0 | #F1F5F9 (ΔE 3.36) | potential mismatch |
+| Primary button #1A56DB, radius 8px | `.btn-primary` #1D4ED8 (ΔE 2.61), 6px; found by class name only | potential mismatch |
+| Primary button text #FFFFFF, padding 24px/12px | same | match |
+| H3 20px; secondary button; container 1200px | no such element / no confident mapping | unable to verify |
+
+### Content (`approved-content.md` vs page text)
+
+| Approved block | Mapping | Expected verdict |
+|---|---|---|
+| “Contact”, “We reply within one business day.” | heading similarity → `/contact` | match; missing (potential: mapping not explicit) |
+| “About us”, “We sell demo products.” | `<!-- page: /about -->` | match |
+| “… every single week.” | `/about` | changed wording (confirmed) |
+| “Our Mission” | `/about` | capitalization differs (potential) |
+| “Free shipping on all orders over $50.” | `/about` | missing (confirmed) |
+| CTA “Contact our team” → `/contact` | `/about` | link target differs: site links to `/blog/` (confirmed) |
+| “Products”, “Prices include VAT.” | `Page: Products` | match |
+| “… widgets and gadgets today.” | `Page: Products` | changed wording (potential: name mapping) |
+| “Join our team”, “We are always looking …” | `Page: Careers` (no such page) | unable to verify |

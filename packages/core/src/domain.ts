@@ -20,14 +20,29 @@ export const SCANNER_LABELS: Record<ScannerKey, string> = {
   responsive: "Responsive / visual",
 };
 
+/** Reference comparisons: run in addition to the scanners when the project has references. */
+export const COMPARISON_KEYS = ["design", "content"] as const;
+export type ComparisonKey = (typeof COMPARISON_KEYS)[number];
+
+export const COMPARISON_LABELS: Record<ComparisonKey, string> = {
+  design: "Design comparison",
+  content: "Content comparison",
+};
+
+/** Everything that produces findings: the six scanners plus the reference comparisons. */
+export const FINDING_SOURCES = [...SCANNER_KEYS, ...COMPARISON_KEYS] as const;
+export const FINDING_SOURCE_LABELS: Record<string, string> = {
+  ...SCANNER_LABELS,
+  ...COMPARISON_LABELS,
+};
+
 /** Labels for every pipeline step stored in scanner_run.step_key (unknown keys fall back to the key). */
 export const PIPELINE_STEP_LABELS: Record<string, string> = {
   preflight: "Preparing website",
   crawl: "Crawling pages",
   capture: "Browser capture",
   ...SCANNER_LABELS,
-  design: "Design comparison",
-  content: "Content comparison",
+  ...COMPARISON_LABELS,
   ai: "AI analysis",
   grounding: "Evidence validation",
   report: "Report generation",

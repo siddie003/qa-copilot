@@ -106,6 +106,14 @@ export default async function ScannerResultsPage({ params }: { params: Promise<{
                       {Number(r.checks.inconclusiveTotal ?? 0)} could not be verified
                     </span>
                   )}
+                  {r.checks?.comparison ? (
+                    <Link
+                      href={`/projects/${project.id}/scans/${latest.id}/comparisons`}
+                      className="mt-1 block text-xs font-medium text-primary hover:underline"
+                    >
+                      View comparison
+                    </Link>
+                  ) : null}
                 </td>
               </tr>
             ))}

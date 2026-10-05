@@ -3,6 +3,8 @@ import type { Database } from "../client";
 import { projectSecret } from "../schema";
 
 export const SCAN_AUTH_KIND = "scan_auth";
+/** Per-project Figma personal access token (overrides FIGMA_ACCESS_TOKEN). */
+export const FIGMA_TOKEN_KIND = "figma_token";
 
 /** Callers must verify project ownership first and pass already-encrypted data. */
 export async function setProjectSecret(

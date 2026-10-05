@@ -1,15 +1,27 @@
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
   createLogger,
   defaultScanDefaults,
+  designSpecSchema,
   parseConfig,
   planScanSteps,
   type ScanAuth,
   type ScanConfigSnapshot,
 } from "@qa/core";
-import { closeDb, getDb, pipelineRepo, projectsRepo, schema, secretsRepo } from "@qa/db";
+import {
+  closeDb,
+  contentRepo,
+  designSpecsRepo,
+  getDb,
+  pipelineRepo,
+  projectsRepo,
+  schema,
+  secretsRepo,
+} from "@qa/db";
 import { encryptSecret, type Resolver } from "@qa/security";
 import { createLocalStorage } from "@qa/storage";
 import { eq } from "drizzle-orm";
@@ -21,6 +33,7 @@ import {
   startDemoSite,
 } from "../../../../fixtures/demo-site/server.mjs";
 import { createTestUser, hasTestDb, resetDatabase } from "../../../../tests/setup/db";
+import { processNextReferenceJob } from "../references/process";
 import { runScan, type ScanRuntime } from "./run-scan";
 
 // Deterministic DNS: only localhost exists, so external links never touch the internet.
@@ -146,6 +159,11 @@ describe.skipIf(!hasTestDb)("scan pipeline (preflight → crawl → capture → 
       expect(steps[key]!.toolName, key).toBeTruthy();
       expect(steps[key]!.checks, key).toMatchObject({ evaluated: expect.any(Number) });
     }
+    // Without references the comparisons are skipped with the reason (never "completed").
+    expect(steps.design).toMatchObject({
+      status: "skipped",
+      statusReason: expect.stringMatching(/No confirmed design reference/),
+    });
     expect(steps.ai).toMatchObject({
       status: "skipped",
       statusReason: expect.stringMatching(/Phase 7/),
@@ -293,6 +311,155 @@ describe.skipIf(!hasTestDb)("scan pipeline (preflight → crawl → capture → 
     });
     expect(steps.seo!.status).toBe("skipped");
   }, 60_000);
+
+  it("compares the fixture site against a design spec and approved content", async () => {
+    const project = await projectsRepo.createProject(getDb(), ownerId, {
+      name: "Fixture with references",
+      websiteUrl: site.url,
+      scanDefaults: defaultScanDefaults(),
+    });
+    const fixture = (name: string) =>
+      readFileSync(new URL(`../../../../fixtures/documents/${name}`, import.meta.url));
+    const spec = await designSpecsRepo.saveConfirmedSpec(
+      getDb(),
+      project.id,
+      designSpecSchema.parse(JSON.parse(fixture("design-spec.json").toString("utf8"))),
+      { userId: ownerId },
+    );
+    const md = fixture("approved-content.md");
+    const key = `projects/${project.id}/documents/approved.md`;
+    await rt.storage.put(key, md);
+    const doc = await contentRepo.insertDocument(getDb(), project.id, {
+      filename: "approved-content.md",
+      mimeType: "text/markdown",
+      sizeBytes: md.length,
+      sha256: createHash("sha256").update(md).digest("hex"),
+      storageKey: key,
+      targetPath: null,
+    });
+    while (await processNextReferenceJob({ ...rt })) {
+      // drain the reference queue
+    }
+    const parsed = (await contentRepo.listParsedDocuments(getDb(), project.id))[0]!;
+    expect(parsed.blockCount).toBe(13);
+
+    const snapshot: ScanConfigSnapshot = {
+      websiteUrl: site.url,
+      scanners: ["seo"],
+      viewports: [
+        { name: "desktop", width: 1440, height: 900 },
+        { name: "mobile", width: 390, height: 844 },
+      ],
+      maxPages: 25,
+      maxDepth: 3,
+      respectRobots: true,
+      pageTimeoutMs: 15_000,
+      concurrency: 3,
+      userAgent: "QACopilotTest/1.0",
+      authorizationAttestedAt: new Date().toISOString(),
+      authType: null,
+      designSpecVersion: spec.version,
+      contentDocuments: [
+        {
+          id: doc.id,
+          filename: doc.filename,
+          sha256: doc.sha256,
+          targetPath: null,
+          blockCount: 13,
+        },
+      ],
+    };
+    const queued = (await pipelineRepo.createScan(getDb(), ownerId, project.id, {
+      configSnapshot: snapshot as unknown as Record<string, unknown>,
+      steps: planScanSteps(["seo"], { designSpec: true, content: true }),
+      triggeredByUserId: ownerId,
+      designSpecId: spec.id,
+    }))!;
+    await runScan(rt, (await pipelineRepo.claimNextScan(getDb(), "w"))!);
+    const steps = await stepsOf(queued.id);
+    expect(steps.design).toMatchObject({
+      status: "completed",
+      toolName: expect.stringMatching(/CIEDE2000/),
+    });
+    expect(steps.content).toMatchObject({ status: "completed" });
+
+    type Cmp = { items: Array<{ key: string; verdict: string; actual?: string | null }> };
+    const design = (steps.design!.checks as { comparison: Cmp }).comparison;
+    const verdicts = Object.fromEntries(design.items.map((i) => [i.key, i.verdict]));
+    expect(verdicts).toMatchObject({
+      "typography.h1.fontFamily": "match",
+      "typography.h1.fontSize": "confirmed_mismatch", // 40px on the site, 48px in the spec
+      "typography.h1.fontWeight": "match",
+      "typography.h1.color": "match",
+      "typography.h3.fontSize": "unable_to_verify", // no h3 on the site
+      "typography.body.fontFamily": "confirmed_mismatch", // system-ui instead of Inter
+      "typography.body.fontSize": "match",
+      "colors.Text": "confirmed_mismatch", // the low-contrast #c4c4c4 paragraph on /products
+      "colors.Link": "confirmed_mismatch", // #0645ad vs #1a56db (ΔE 7.86)
+      "colors.Header": "potential_mismatch", // #f1f5f9 vs #e2e8f0 (ΔE 3.36)
+      "colors.Page": "match",
+      "components.buttonPrimary.background": "potential_mismatch", // ΔE 2.61, class heuristic
+      "components.buttonPrimary.color": "match",
+      "components.buttonPrimary.borderRadius": "potential_mismatch", // 6px vs 8px, heuristic
+      "components.buttonPrimary.paddingX": "match",
+      "components.buttonPrimary.paddingY": "match",
+      "components.buttonSecondary.background": "unable_to_verify",
+      "layout.containerMaxWidth": "unable_to_verify",
+    });
+    expect(design.items.find((i) => i.key === "colors.Text")!.actual).toBe("#c4c4c4");
+
+    const content = (steps.content!.checks as { comparison: Cmp }).comparison;
+    expect(content.items.map((i) => i.verdict)).toEqual([
+      "match", // Contact (heading similarity → /contact)
+      "potential_mismatch", // "We reply within one business day." missing (mapping not explicit)
+      "match", // About us (page marker /about)
+      "match",
+      "confirmed_mismatch", // "every single week" → changed wording
+      "potential_mismatch", // "Our Mission" vs "Our mission"
+      "confirmed_mismatch", // "Free shipping…" missing
+      "confirmed_mismatch", // CTA links to /blog/ instead of /contact
+      "match", // Products (page name)
+      "match", // "Prices include VAT." contained in the page text
+      "potential_mismatch", // "… gadgets today." changed wording on a name-mapped page
+      "unable_to_verify", // Careers: no such page
+      "unable_to_verify",
+    ]);
+
+    const findings = (await pipelineRepo.listFindingsForScan(getDb(), ownerId, queued.id))!;
+    const byRule = (scanner: string, rule: string) =>
+      findings.filter((f) => f.scanner === scanner && f.ruleId === rule);
+    expect(byRule("design", "design-font-size-mismatch")[0]).toMatchObject({
+      verdict: "confirmed",
+      expected: "48px",
+      actual: "40px",
+      displayId: expect.stringMatching(/^DSN-\d{3}$/),
+    });
+    expect(byRule("content", "content-link-target-mismatch")[0]).toMatchObject({
+      verdict: "confirmed",
+      severity: "high",
+      pageUrl: expect.stringMatching(/\/about$/),
+    });
+    // Browser-default form control colors (e.g. the /contact button) are not palette near-misses.
+    expect(byRule("design", "design-color-near-palette")).toHaveLength(0);
+    const changed = byRule("content", "content-changed-wording").find(
+      (f) => f.verdict === "confirmed",
+    )!;
+    expect(changed.evidence.map((e) => e.kind)).toEqual(["document", "text_diff", "screenshot"]);
+
+    // Computed styles are stored for every capture; text only at the widest viewport.
+    const captures = await getDb()
+      .select()
+      .from(schema.pageCapture)
+      .innerJoin(schema.page, eq(schema.page.id, schema.pageCapture.pageId))
+      .where(eq(schema.page.scanId, queued.id));
+    expect(captures.every((c) => c.page_capture.computedStylesKey)).toBe(true);
+    expect(
+      captures
+        .filter((c) => c.page_capture.textContentKey)
+        .every((c) => c.page_capture.viewport === "desktop"),
+    ).toBe(true);
+    expect(captures.some((c) => c.page_capture.textContentKey)).toBe(true);
+  }, 240_000);
 
   it("respects page limits and ignores robots.txt when configured", async () => {
     const queued = await queueScan(site.url, {

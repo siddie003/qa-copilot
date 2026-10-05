@@ -2,6 +2,7 @@ import type { ScanDefaults } from "@qa/core";
 import { and, count, desc, eq, ilike, inArray, isNull, or, sql } from "drizzle-orm";
 import type { Database } from "../client";
 import { issueTrack, project, referenceSource, scan } from "../schema";
+import { notifyReferenceQueued } from "./content";
 import type { FigmaReferenceValues } from "./references";
 
 export interface IssueCounts {
@@ -196,6 +197,7 @@ export async function createProject(
         .values({ projectId: created!.id, kind: "figma", status: "pending", ...figma });
     return created!;
   });
+  if (figma) await notifyReferenceQueued(db);
   const [summary] = await summarize(db, [row]);
   return summary!;
 }

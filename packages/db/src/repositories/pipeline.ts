@@ -40,6 +40,9 @@ export async function createScan(
     configSnapshot: Record<string, unknown>;
     steps: NewScanStep[];
     triggeredByUserId: string;
+    /** Frozen reference inputs: confirmed design spec version and content documents hash. */
+    designSpecId?: string | null;
+    contentSnapshotHash?: string | null;
   },
 ) {
   const created = await db.transaction(async (tx) => {
@@ -58,6 +61,8 @@ export async function createScan(
         configSnapshot: values.configSnapshot,
         isDemo: counter.isDemo,
         triggeredByUserId: values.triggeredByUserId,
+        designSpecId: values.designSpecId ?? null,
+        contentSnapshotHash: values.contentSnapshotHash ?? null,
       })
       .returning();
     await tx.insert(scannerRun).values(
@@ -179,6 +184,15 @@ export async function updateStep(
     })
     .where(and(eq(scannerRun.scanId, scanId), eq(scannerRun.stepKey, stepKey)));
   await notifyScan(db, scanId);
+}
+
+/** Step keys of a scan that are still waiting to run. */
+export async function pendingStepKeys(db: Database, scanId: string) {
+  const rows = await db
+    .select({ stepKey: scannerRun.stepKey })
+    .from(scannerRun)
+    .where(and(eq(scannerRun.scanId, scanId), eq(scannerRun.status, "pending")));
+  return new Set(rows.map((r) => r.stepKey));
 }
 
 /** Marks every still-pending step as skipped with a reason (e.g. after a fatal failure). */
@@ -305,6 +319,8 @@ export async function insertCapture(
     height: number;
     screenshotKey: string | null;
     domSnapshotKey: string | null;
+    computedStylesKey?: string | null;
+    textContentKey?: string | null;
     consoleMessages: Array<Record<string, unknown>>;
     timings: Record<string, unknown>;
     metrics: Record<string, unknown> | null;

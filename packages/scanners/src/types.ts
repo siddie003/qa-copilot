@@ -1,4 +1,4 @@
-import type { ScannerKey, Severity } from "@qa/core";
+import type { ComparisonKey, DesignSpec, ScannerKey, Severity } from "@qa/core";
 import type { FetchOptions, RobotsRules } from "@qa/crawler";
 import type { Page as PwPage } from "playwright";
 import { z } from "zod";
@@ -16,6 +16,8 @@ export const EVIDENCE_KINDS = [
   "console",
   "document",
   "link_check",
+  "text_diff",
+  "design_token",
 ] as const;
 export type EvidenceKind = (typeof EVIDENCE_KINDS)[number];
 
@@ -60,6 +62,32 @@ export interface CheckSummary {
   /** Checks that could not be verified, with the reason. Shown as "Inconclusive checks". */
   inconclusive: Array<{ check: string; reason: string; pageUrl?: string | null }>;
   notes?: string[];
+  /** Reference comparisons (design, content): every compared item with its verdict. */
+  comparison?: ComparisonSummary;
+}
+
+export type ComparisonVerdict =
+  "match" | "confirmed_mismatch" | "potential_mismatch" | "unable_to_verify";
+
+export interface ComparisonItem {
+  key: string;
+  label: string;
+  verdict: ComparisonVerdict;
+  expected?: string | null;
+  actual?: string | null;
+  pageUrl?: string | null;
+  /** Where the reference value came from (token source or document location). */
+  reference?: string | null;
+  /** Why the verdict was reached (mapping method, ΔE, reason it could not be verified). */
+  detail?: string | null;
+}
+
+export interface ComparisonSummary {
+  matched: number;
+  confirmedMismatch: number;
+  potentialMismatch: number;
+  unableToVerify: number;
+  items: ComparisonItem[];
 }
 
 export interface ScannerResult {
@@ -96,6 +124,10 @@ export interface CaptureRecord {
   requests: NetworkRecord[];
   /** Rendered DOM (after JavaScript) for this viewport. */
   loadDom(): Promise<string | null>;
+  /** Computed styles of design roles (only captured when the scan has a design reference). */
+  loadDesignStyles(): Promise<Record<string, unknown> | null>;
+  /** Visible text blocks and links (only captured when the scan has content documents). */
+  loadTextContent(): Promise<Record<string, unknown> | null>;
 }
 
 export interface PageRecord {
@@ -119,6 +151,32 @@ export interface LivePage {
   close(): Promise<void>;
 }
 
+export interface ContentBlockRecord {
+  order: number;
+  type: string;
+  level: number | null;
+  text: string;
+  normalizedText: string;
+  href: string | null;
+  pageHint: string | null;
+  location: Record<string, unknown> | null;
+}
+
+/** Reference inputs frozen into the scan when it was created. */
+export interface ScanReferences {
+  designSpec: { id: string; version: number; spec: DesignSpec } | null;
+  content: {
+    documents: Array<{
+      id: string;
+      filename: string;
+      targetPath: string | null;
+      blocks: ContentBlockRecord[];
+    }>;
+    /** Documents frozen into the scan that were deleted before the comparison ran. */
+    missing: string[];
+  } | null;
+}
+
 export interface ScannerContext {
   scanId: string;
   siteUrl: string;
@@ -134,10 +192,11 @@ export interface ScannerContext {
   ): Promise<LivePage>;
   pageTimeoutMs: number;
   log: (msg: string, data?: Record<string, unknown>) => void;
+  references: ScanReferences;
 }
 
 export interface Scanner {
-  key: ScannerKey;
+  key: ScannerKey | ComparisonKey;
   /** Prefix of human-readable finding ids, e.g. SEO → SEO-001. */
   idPrefix: string;
   version: string;

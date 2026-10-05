@@ -69,6 +69,10 @@ export const referenceSource = pgTable(
     storageKey: text(),
     status: referenceStatusEnum().notNull().default("pending"),
     error: text(),
+    /** File details (guideline documents) and the extraction report (what was read / skipped). */
+    meta: jsonb().$type<Record<string, unknown>>(),
+    /** Set while a worker processes the reference (stale values are recovered on worker start). */
+    processingStartedAt: timestamp({ withTimezone: true }),
     fetchedAt: timestamp({ withTimezone: true }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
@@ -89,6 +93,10 @@ export const designSpec = pgTable(
     tokens: jsonb().$type<Record<string, unknown>>().notNull(),
     /** Values extracted from documents are drafts until the user confirms them. */
     confirmedByUser: boolean().notNull().default(false),
+    /** How this version was produced: manual | figma | document. */
+    origin: varchar({ length: 32 }).notNull().default("manual"),
+    createdByUserId: text().references(() => user.id, { onDelete: "set null" }),
+    confirmedAt: timestamp({ withTimezone: true }),
     createdAt: createdAt(),
   },
   (t) => [unique("design_spec_project_version_uq").on(t.projectId, t.version)],
@@ -108,6 +116,12 @@ export const contentDocument = pgTable(
     storageKey: text().notNull(),
     parseStatus: parseStatusEnum().notNull().default("pending"),
     parseError: text(),
+    /** Website page the document describes (explicit user mapping, e.g. "/about"). */
+    targetPath: text(),
+    blockCount: integer().notNull().default(0),
+    /** Extraction details: page count, warnings. */
+    meta: jsonb().$type<Record<string, unknown>>(),
+    processingStartedAt: timestamp({ withTimezone: true }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },

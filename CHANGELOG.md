@@ -2,6 +2,39 @@
 
 ## [Unreleased]
 
+### Phase 6: Design and content references, comparison (2026-10-04)
+#### Added
+- DesignSpec schema with per-token provenance, versioning with drafts and confirmation; token
+  editor with JSON import/export (References page and setup wizard).
+- `packages/reference`: Figma REST client and normalizer (text/color styles, Button
+  Primary/Secondary components, Container frame); deterministic brand-guideline extraction with
+  citations; content extraction from PDF (font-size headings, page numbers), DOCX, Markdown and
+  TXT with page markers and CTA targets.
+- Reference worker loop in the worker: parses uploaded documents, reads Figma files, extracts
+  guideline drafts; stale-job recovery; status in the worker health endpoint.
+- Document upload validation (extension, MIME, magic bytes, UTF-8, DOCX zip-bomb guard) and
+  storage under random keys; per-project Figma token stored encrypted (write-only).
+- Design comparison step (computed styles of mapped roles, CIEDE2000 colors, pixel tolerances,
+  palette near-misses) and content comparison step (page mapping, exact / changed wording /
+  rewritten / missing / capitalization, CTA text and targets, word-diff evidence); both report
+  match, confirmed mismatch, potential mismatch and unable to verify.
+- Capture of computed styles and visible text when a scan has references; scans freeze the
+  confirmed design spec version and the parsed documents.
+- References tab, comparison report per scan, evidence rendering for word diffs, color swatches
+  and computed-style observations; findings filter for design/content; wizard steps for Figma,
+  guideline, manual values and content uploads with live processing status.
+- API: design spec, draft confirm/discard, guideline and content document uploads, document
+  mapping/blocks/retry/delete, reference refresh/delete, Figma token.
+- Migration `0003_reference_processing`; fixture design spec, approved content, Figma response and
+  DOCX/PDF builders; unit, integration and end-to-end tests (280 vitest, 7 Playwright).
+#### Changed
+- Fixture website: documented design and content differences (stylesheet, About and Products copy).
+- Responsive scanner: its design-spacing inconclusive check now points to the design comparison.
+#### Fixed
+- `packages/storage` was excluded from git by the `storage/` ignore pattern (now `/storage/`).
+- Setup wizard's last step offered a disabled "Start QA Scan" with outdated wording; it now starts
+  scans. Outdated Phase 4 note on the Scan page.
+
 ### Phase 5: Six QA scanners (2026-10-03)
 #### Added
 - `packages/scanners`: scanner contract (validated findings with mandatory evidence, check

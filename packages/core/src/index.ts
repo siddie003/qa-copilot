@@ -3,6 +3,8 @@ export * from "./domain";
 export * from "./env";
 export * from "./errors";
 export * from "./figma";
+export * from "./design-spec";
+export * from "./content";
 export * from "./pipeline";
 export * from "./scan-auth";
 export * from "./logger";

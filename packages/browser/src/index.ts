@@ -7,9 +7,11 @@ import {
 import { authHeadersFor, isOnSite, parseCookieString, type ScanAuth } from "@qa/core";
 import { chromium, type Browser, type BrowserContext, type Page, type Request } from "playwright";
 import { METRICS_SCRIPT, VITALS_INIT_SCRIPT } from "./page-scripts";
+import { designStylesScript, TEXT_BLOCKS_SCRIPT } from "./reference-scripts";
 import { startGuardProxy, type GuardProxy } from "./proxy";
 
 export { startGuardProxy, type GuardProxy };
+export { designStylesScript, TEXT_BLOCKS_SCRIPT };
 
 export interface ViewportSpec {
   name: string;
@@ -193,6 +195,10 @@ export interface PageCaptureResult {
   metrics: Record<string, unknown> | null;
   /** Absolute hrefs of <a>/<area> elements in the rendered DOM. */
   renderedLinks: string[];
+  /** Computed styles of design roles (only when requested; see reference-scripts.ts). */
+  designStyles: Record<string, unknown> | null;
+  /** Visible text blocks and links (only when requested). */
+  textContent: Record<string, unknown> | null;
   error: string | null;
 }
 
@@ -283,7 +289,15 @@ export async function capturePage(
   guard: GuardState,
   url: string,
   viewport: ViewportSpec,
-  opts: { timeoutMs: number; screenshot: boolean; proxy?: GuardProxy | null },
+  opts: {
+    timeoutMs: number;
+    screenshot: boolean;
+    proxy?: GuardProxy | null;
+    /** Collect computed styles for design comparison (explicit selectors from the reference). */
+    design?: { selectors: string[] } | null;
+    /** Collect visible text for content comparison. */
+    text?: boolean;
+  },
 ): Promise<PageCaptureResult> {
   const page = await context.newPage();
   const blockedBefore = guard.blocked.length;
@@ -305,6 +319,8 @@ export async function capturePage(
     timings: {},
     metrics: null,
     renderedLinks: [],
+    designStyles: null,
+    textContent: null,
     error: null,
   };
   try {
@@ -322,6 +338,12 @@ export async function capturePage(
     base.renderedLinks = await page.$$eval("a[href], area[href]", (els) =>
       els.map((e) => (e as HTMLAnchorElement).href).filter((h) => /^https?:/i.test(h)),
     );
+    if (opts.design)
+      base.designStyles = (await page.evaluate(
+        designStylesScript(opts.design.selectors),
+      )) as Record<string, unknown>;
+    if (opts.text)
+      base.textContent = (await page.evaluate(TEXT_BLOCKS_SCRIPT)) as Record<string, unknown>;
     if (opts.screenshot) {
       const height = (base.timings.documentHeight as number | null) ?? viewport.height;
       base.screenshotTruncated = height > MAX_SCREENSHOT_HEIGHT;

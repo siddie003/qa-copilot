@@ -1,0 +1,25 @@
+{
+  "typography": {
+    "h1": { "fontFamily": "Georgia", "fontSize": 48, "fontWeight": 700, "color": "#1a1a2e" },
+    "h3": { "fontSize": 20 },
+    "body": { "fontFamily": "Inter", "fontSize": 16 }
+  },
+  "colors": {
+    "Text": { "value": "#222222", "role": "text" },
+    "Link": { "value": "#1a56db", "role": "link" },
+    "Header": { "value": "#e2e8f0", "role": "headerBackground" },
+    "Page": { "value": "#ffffff", "role": "background" }
+  },
+  "components": {
+    "buttonPrimary": {
+      "background": "#1a56db",
+      "color": "#ffffff",
+      "borderRadius": 8,
+      "paddingX": 24,
+      "paddingY": 12
+    },
+    "buttonSecondary": { "background": "#ffffff" }
+  },
+  "layout": { "containerMaxWidth": { "value": 1200 } },
+  "spacing": { "scale": { "values": [4, 8, 12, 16, 24, 32, 48] } }
+}
