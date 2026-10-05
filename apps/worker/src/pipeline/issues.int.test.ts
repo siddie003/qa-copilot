@@ -436,11 +436,16 @@ describe.skipIf(!hasTestDb)(
       await groundingStep(e); // re-run: occurrences replaced, nothing duplicated
       expect((await scanIssuesRepo.listScanIssues(db(), ownerId, scanId))!.issues).toHaveLength(5);
 
-      // A user resolved ISSUE-1; a later scan must not overwrite that (reopen logic is Phase 9).
+      // A user resolved ISSUE-1 and is working on ISSUE-2. A later scan keeps "in progress"
+      // and, finding ISSUE-1 again with evidence, reopens it (Phase 9 reopen rule).
       await db()
         .update(schema.issueTrack)
         .set({ status: "resolved" })
         .where(eq(schema.issueTrack.displayNo, 1));
+      await db()
+        .update(schema.issueTrack)
+        .set({ status: "in_progress" })
+        .where(eq(schema.issueTrack.displayNo, 2));
       const next = await newScan({
         ...findings,
         seo: [
@@ -463,14 +468,21 @@ describe.skipIf(!hasTestDb)(
         .where(eq(schema.issueTrack.projectId, projectId))
         .orderBy(asc(schema.issueTrack.displayNo));
       expect(tracks.map((t) => [t.displayNo, t.status, t.lastSeenScanId === next])).toEqual([
-        [1, "resolved", true],
-        [2, "open", true],
+        [1, "reopened", true],
+        [2, "in_progress", true],
         [3, "open", true],
         [4, "open", true],
         [5, "open", true],
         [6, "open", true],
       ]);
       expect(tracks[5]!.title).toBe("Page has no title");
+      const reopenEvents = await db()
+        .select()
+        .from(schema.issueStatusEvent)
+        .where(eq(schema.issueStatusEvent.toStatus, "reopened"));
+      expect(reopenEvents.map((e) => [e.trackId, e.fromStatus, e.scanId, e.userId])).toEqual([
+        [tracks[0]!.id, "resolved", next, null],
+      ]);
     });
 
     it("stops after a configuration error and still creates every issue", async () => {

@@ -51,6 +51,36 @@ Run: `npm run demo:site` (http://localhost:4100). `localhost:4100` is in the def
 No framework or CMS signals are served, so technology detection reports "Could not determine"
 (the `Server` header is reported separately as server software).
 
+## Site versions (scan history and comparison)
+
+The fixture serves two versions so scan comparisons can be verified on real scans:
+
+- **v1** (default): everything documented on this page.
+- **v2** ("next release"): JSON-LD on `/` is valid; `/about` has a meta description and its
+  image has alt text; `/blog/post-1` has no H1 (its heading is an H2: a new defect); `/wide`
+  answers HTTP 500. Everything else is unchanged.
+
+Select the version with `node fixtures/demo-site/server.mjs [port] [v1|v2]`,
+`DEMO_SITE_VARIANT`, at runtime with `POST /__fixture/variant` (body `v1` or `v2`; `GET` shows the
+current one), or per request with the header `X-Fixture-Variant: v1|v2` (a project can send it
+as a custom-header site credential, so other scans of the same server are unaffected). The toggle
+path is not linked from any page.
+
+Expected comparison results (asserted by `apps/worker/src/pipeline/history.int.test.ts` on real
+scans and by the `history` end-to-end test):
+
+| Scans | Issue | Expected |
+|---|---|---|
+| v1 → v2 | Meta description missing, invalid JSON-LD, image alt (axe and SEO) | resolved |
+| v1 → v2 | Page has no H1 (SEO), page-has-heading-one (axe) on `/blog/post-1` | new |
+| v1 → v2 | Two H1s on `/blog/post-2`, marked resolved by a user after the v1 scan | reopened (status set to Reopened) |
+| v1 → v2 | Clipped text on `/wide` | not rechecked (`/wide` could not be analyzed: HTTP 500) |
+| v1 → v2 | Broken internal links | changed (new finding: the link to `/wide`) |
+| v2 → v1 | Fixes undone (meta description, JSON-LD, image alt) | reopened (found in scan 1, not in scan 2) |
+| v2 → v1 | Missing H1 on `/blog/post-1` | resolved |
+| v2 → v1 | Clipped text on `/wide` | newly checked (scan 2 could not analyze `/wide`) |
+| v1 → v1 | everything | persistent (no new, resolved, changed or reopened issues) |
+
 ## Design and content references
 
 `fixtures/documents/design-spec.json` (design reference) and

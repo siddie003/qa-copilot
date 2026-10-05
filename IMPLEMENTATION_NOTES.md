@@ -230,7 +230,7 @@
   once, all findings belong to the scan, unique fingerprints. New tracks numbered from
   `project.issue_counter` in group order (severity first). Existing tracks get the latest
   severity/title/category/lastSeen; status is updated only while system-managed (`open`,
-  `inconclusive`) — user statuses are kept (reopen logic is Phase 9). `issue_finding.raw_finding_id`
+  `inconclusive`) — user statuses are kept (Phase 9 added the reopen rule). `issue_finding.raw_finding_id`
   is unique. `ai_run`: one row per sent request (status, tokens, latency, serving model, error,
   detail incl. prompt version); prompts/responses are never stored.
 - AI-assisted guideline reading (reference worker, only with a provider, 180 s cap): lines with
@@ -280,7 +280,7 @@
 - System events (`user_id` null, `scan_id` set): `materializeScanIssues` writes "First detected by
   this scan." for new tracks and "Status set from the evidence of this scan." when a system status
   (open/inconclusive) changes. Re-running materialization adds no duplicate events. User statuses
-  are still kept across scans (reopen logic is Phase 9).
+  are still kept across scans (Phase 9 added the reopen rule, below).
 - Explorer: `lib/issue-filters.ts` is shared by the pages and `GET /api/v1/issues`; invalid values
   are dropped (never 400). The verdict filter groups inconclusive + unable_to_verify as "Unable to
   verify". Latest-occurrence columns (verdict, confidence, page count, origin) come from the `issue`
@@ -295,16 +295,102 @@
   references chunks of the old build: pages render but never hydrate. Restart web servers after
   every build (seen during the Phase 8 manual check; e2e starts its own server on 3100).
 
+## Phase 9 decisions
+- **Engine placement.** The comparison is a pure, browser-safe module `@qa/core/comparison`
+  (`compareScans`, labels, types) instead of a new package: the web bundle and the worker can use
+  it without pulling in crawler/undici code. `pageKey()` (site-relative path + sorted query
+  without tracking parameters) mirrors `normalizeUrl` in `@qa/crawler`; the scanners test
+  `history-compat.test.ts` keeps them (and the gap-check labels below) in step.
+- **Identity.** Issues are matched by `issue_track` (Phase 7 grouping: one track per scanner rule;
+  design/content per finding), so AI text never affects comparisons. Inside an issue, findings
+  are matched by `raw_finding.fingerprint` (multimap, pairs in order); a second pass pairs
+  leftovers by scanner + rule + page key + selector, because the fingerprint's viewport class
+  changes when an element is seen at one viewport instead of several (reported as a changed
+  finding with a `viewport` field change).
+- **"Re-checked" (absence counts as evidence)** for a finding of scan A in scan B: the scanner's
+  step exists in B and is `completed` or `inconclusive` (failed/skipped/pending/not selected = no);
+  for design the scans have the same `design_spec_id`, for content the same
+  `content_snapshot_hash` (includes page mapping); the step has no scanner-wide gap
+  (`SCANNER_WIDE_GAP_CHECKS`: links "Link checks" limit); the page (by `pageKey` of url/final URL)
+  was crawled in B without error, HTTP < 400 and HTML; the finding's viewport was captured in B
+  without error; B's step has no inconclusive check for that page that is page-level
+  (`PAGE_LEVEL_GAP_CHECKS`: "axe-core analysis", "On-page SEO", "HTML security checks") or for the
+  same rule (`check === ruleId` or starts with `ruleId:`, e.g. axe "needs review" items).
+  Truncated inconclusive lists (more than the 200 stored) only add a warning. The same test is
+  used in reverse for target findings (new vs newly checked).
+- **Issue categories (precedence):** reopened (status event `→ reopened` written by the target
+  scan) > in both: changed (severity, verdict class, or findings new / no longer found / changed
+  values) else persistent (a different page list alone, e.g. pages not re-checked, is not a
+  change; not-rechecked findings are mentioned in the reason) > base only: resolved if every
+  finding was re-checked and is gone, else not rechecked ("k of n findings could not be
+  re-checked") > target only: newly checked if no finding was checkable in the base, reopened if
+  the track occurred in a scan before the base ("Found in scan #x, not found by scan #b, and
+  found again by scan #t"), else new. Verdict classes: `inconclusive` = `unable_to_verify`.
+  Severity/verdict changes are issue-level; finding changes compare severity, verdict, actual,
+  expected, viewport.
+- **Lab measurements are not changes.** For `MEASUREMENT_SOURCES` (performance) a different
+  `actual` value or worst viewport is recorded with `measurement: true` and shown ("lab
+  measurement; varies between page loads"), but does not make a finding or issue "changed"; a
+  severity/verdict change (threshold crossed) does. Found by two scans of the same fixture
+  version with all six scanners: TTFB 1523 → 1515 ms and worst viewport desktop → mobile; with the
+  rule, all 40 issues were persistent.
+- **Comparability.** Both scans must be finished (`REPORTABLE_SCAN_STATUSES`; 409 otherwise),
+  in the same project (foreign/malformed ids 404), base older than target (400). A scan whose
+  `grounding` step is missing (pre-Phase 7) or not completed has no issue records: the result is
+  `comparable: false` with the reason, steps are still compared. Warnings: website URL, scanner
+  set, viewports, crawl limits, design reference, content documents, scans not `completed`.
+  "Comparable scan" = finished + grounding completed; the default pair is the latest comparable
+  scan and the comparable scan before it; history compares each scan with its previous
+  comparable scan (failed/cancelled scans in between are skipped, with their reason shown).
+- **Cache.** `scan_comparison` (existing table, unique base/target pair) stores the summary with
+  `version = COMPARISON_VERSION`; other versions are ignored and recomputed. Finished scans and
+  the status events their materialization wrote do not change, so summaries stay valid. The
+  history page computes missing summaries once (page + trend, ≤ 20 trend scans); the dashboard
+  only reads cached ones (`latestCachedForTargets`, closest earlier base).
+- **Reopen rule** (`shouldReopen` in `scan-issues.ts`, inside `materializeScanIssues`): track
+  `resolved`, occurrence status `open` (confirmed or needs review), and `resolved_at` ≤ scan start
+  (`started_at ?? created_at`; null `resolved_at` counts as earlier) → `reopened`, `resolved_at`
+  cleared, system event (user null, scan id, note "Found again by this scan after it was marked
+  resolved."). Inconclusive occurrences and fixes claimed after the scan started keep `resolved`.
+  `reopened` is not a system status: later scans keep it until a user changes it; `in_progress`
+  and `ignored` are kept. Re-running materialization writes no second event.
+- **No automatic resolving.** Scans never set `resolved`; the compare page offers "Set N
+  still-open issue(s) to Resolved" (existing audited bulk API, note naming both scans) only when
+  the target is the project's latest comparable scan, so an older comparison cannot override a
+  newer detection.
+- **Drizzle gotcha:** in a single-table `select`, column references inside `sql` subqueries are
+  rendered unqualified ("id" is ambiguous in correlated subqueries). `loadComparisonTracks`
+  writes those subqueries as raw SQL with explicit aliases.
+- **UI.** Chart = server-rendered SVG (no chart library): stacked bars by severity reusing
+  `SEVERITY_MARKERS` colors (critical on the baseline, 2px surface gaps), legend, bars are links
+  with hover/focus titles; the SVG has `role="group"` (not `img`, which would make the links
+  presentational); the history table is the table view. Compare page: category tiles double as
+  filters (`?show=`), categories with their definitions, issue rows with finding details in
+  `<details>`, steps table (changed steps first, unchanged collapsed).
+- **Scanner fix.** The accessibility scanner records pages beyond its 25-page limit as
+  page-level inconclusive checks ("Not analyzed: …"), so their issues are never counted as
+  resolved.
+- **Fixture versions.** `createDemoSiteServer(state)` / `startDemoSite(port, { variant })` with
+  `setVariant`; `POST /__fixture/variant`; `X-Fixture-Variant` request header overrides per
+  request. The e2e spec sends the header as the project's custom-header site credential so the
+  shared fixture server's state never changes for other specs.
+- **E2E log noise.** Leaving a page (or ending a test) while its streamed response is still in
+  flight aborts it, which `next start` logs as "The destination stream closed early" (digest
+  1715731721). It is timing-dependent (it shows up once in a varying spec per full run, or not at
+  all) and fails nothing; the history spec waits for `networkidle` at its end. The compare page's
+  per-issue and per-finding links use `prefetch={false}` (dozens of links to heavy pages).
+
 ## Environment facts
 - PostgreSQL 18 binaries: `C:\Program Files\PostgreSQL\18\bin` (not on PATH). Service `postgresql-x64-18`.
 - No Docker, no Redis, no pnpm. Windows 11, Node 22.16.
 - Project folder: `C:\Users\Siddharth\Downloads\qa-copilot`.
+- Agent sessions: creating the Phase 6–8 checkpoint commits with `git commit-tree` +
+  `git update-ref` (Phase 9 session) made the auto-mode permission classifier block several plain
+  file reads afterwards ("Git Destructive"). Use ordinary `git add`/`git commit` for checkpoints.
 
 ## Unfinished tasks
-- None inside Phase 8. Next: Phase 9 (after approval). Phases 6, 7 and 8 are not committed yet;
-  a git object `dfba1be` (not on any branch) holds the exact Phase 6 tree for a separate commit
-  (creating the checkpoint commits was blocked by the tool permission policy in the Phase 8
-  session; see PROJECT_STATUS.md).
+- None inside Phase 9. Next: Phase 10 (hardening, Docker, deployment docs, full acceptance
+  workflow) after approval. Phases 6, 7 + 8 and 9 each have a checkpoint commit.
 
 ## Known bugs
 - None known.

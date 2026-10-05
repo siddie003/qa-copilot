@@ -22,6 +22,25 @@ Status: **Draft for approval** · Date: 2026-10-03 · Phase: 0 (no functional co
 ---
 
 > **Amendments during implementation**
+> - Phase 9: **Comparison is computed on demand, not a pipeline step.** `compareScans` is a pure
+>   function in `@qa/core/comparison`; `comparisonsRepo` loads both scans' records (steps with
+>   inconclusive checks, pages, captures, findings, issues with finding links) and the track
+>   facts (current status, last occurrence before the base, reopen event of the target);
+>   `scan_comparison` caches only the versioned summary. Categories: new, reopened, changed,
+>   resolved, persistent, **not rechecked** and **newly checked** (the last two make coverage gaps
+>   explicit instead of counting them as resolved/new). "Re-checked" (§4 rule refined): the
+>   scanner step completed or was inconclusive, the page was analyzable, the finding's viewport
+>   was captured, the step has no page-level or same-rule inconclusive check for the page and no
+>   scanner-wide limit, and design/content references are unchanged. Reopened also covers an
+>   issue seen before the base scan, absent from it and found again. Finding-level detail matches
+>   fingerprints (viewport-class fallback); for performance findings a different lab measurement
+>   or worst viewport is informational, not a change. Scans without issue records are "not comparable"
+>   (steps still compared). Reopen logic lives in issue materialization (resolved before the scan
+>   started + evidence → `reopened`, system event); scans never auto-resolve. The API is
+>   `GET /projects/:id/comparisons?base=&target=` (defaults to the latest comparable pair) and
+>   `GET /projects/:id/history`; the UI is the project's Scan history tab (latest changes, chart,
+>   table) and `/projects/:id/history/compare`. The fixture variant toggle is `v1`/`v2`
+>   (`POST /__fixture/variant` or the `X-Fixture-Variant` header).
 > - Phase 8: **Reports are not a scan step.** They are generated on demand for finished scans
 >   (completed, completed with failures, failed, cancelled): the `report` row is the job (pending →
 >   running → completed/failed, claimed with SKIP LOCKED by a report loop in `apps/worker`, LISTEN

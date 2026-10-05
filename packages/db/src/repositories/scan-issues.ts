@@ -119,7 +119,26 @@ const SYSTEM_STATUSES = new Set(["open", "inconclusive"]);
 export const SYSTEM_EVENT_NOTES = {
   detected: "First detected by this scan.",
   evidence: "Status set from the evidence of this scan.",
+  reopened: "Found again by this scan after it was marked resolved.",
 } as const;
+
+/**
+ * Reopen rule (Phase 9): a track a user marked resolved is set to reopened when a scan finds it
+ * again with evidence (confirmed or needs review, i.e. system status "open"), and only if it was
+ * resolved before that scan started (a scan that started earlier may predate the fix). An
+ * inconclusive occurrence cannot show that the fix failed, so the track stays resolved.
+ */
+export function shouldReopen(
+  track: { status: string; resolvedAt: Date | null },
+  occurrenceStatus: "open" | "inconclusive",
+  scanStartedAt: Date,
+) {
+  return (
+    track.status === "resolved" &&
+    occurrenceStatus === "open" &&
+    (track.resolvedAt === null || track.resolvedAt.getTime() <= scanStartedAt.getTime())
+  );
+}
 
 /**
  * Stores a scan's issues in one transaction. Tracks are matched by fingerprint within the
@@ -129,15 +148,16 @@ export const SYSTEM_EVENT_NOTES = {
 export async function materializeScanIssues(db: Database, scanId: string, issues: NewScanIssue[]) {
   return db.transaction(async (tx) => {
     const [s] = await tx
-      .select({ projectId: scan.projectId })
+      .select({ projectId: scan.projectId, startedAt: scan.startedAt, createdAt: scan.createdAt })
       .from(scan)
       .where(eq(scan.id, scanId));
     if (!s) throw new Error(`Scan ${scanId} not found`);
     const projectId = s.projectId;
+    const scanStartedAt = s.startedAt ?? s.createdAt;
     // Serializes numbering and track updates per project.
     await tx.execute(sql`select id from ${project} where id = ${projectId} for update`);
     await tx.delete(issue).where(eq(issue.scanId, scanId));
-    if (!issues.length) return { issues: 0, newTracks: 0, updatedTracks: 0 };
+    if (!issues.length) return { issues: 0, newTracks: 0, updatedTracks: 0, reopened: 0 };
 
     const fingerprints = new Set(issues.map((i) => i.fingerprint));
     if (fingerprints.size !== issues.length) throw new Error("Duplicate issue fingerprints");
@@ -157,7 +177,12 @@ export async function materializeScanIssues(db: Database, scanId: string, issues
     if (owned !== allFindings.length) throw new Error("Issue references findings of another scan");
 
     const existing = await tx
-      .select({ id: issueTrack.id, fingerprint: issueTrack.fingerprint, status: issueTrack.status })
+      .select({
+        id: issueTrack.id,
+        fingerprint: issueTrack.fingerprint,
+        status: issueTrack.status,
+        resolvedAt: issueTrack.resolvedAt,
+      })
       .from(issueTrack)
       .where(
         and(
@@ -193,6 +218,7 @@ export async function materializeScanIssues(db: Database, scanId: string, issues
           id: issueTrack.id,
           fingerprint: issueTrack.fingerprint,
           status: issueTrack.status,
+          resolvedAt: issueTrack.resolvedAt,
         });
       for (const t of inserted) tracks.set(t.fingerprint, t);
       // Audit trail: every track starts with a system event naming the scan that found it.
@@ -208,9 +234,11 @@ export async function materializeScanIssues(db: Database, scanId: string, issues
       );
     }
     const statusEvents: Array<typeof issueStatusEvent.$inferInsert> = [];
+    let reopened = 0;
     for (const t of existing) {
       const i = issues.find((x) => x.fingerprint === t.fingerprint)!;
       const systemChange = SYSTEM_STATUSES.has(t.status) && t.status !== i.status;
+      const reopen = shouldReopen(t, i.status, scanStartedAt);
       await tx
         .update(issueTrack)
         .set({
@@ -219,8 +247,20 @@ export async function materializeScanIssues(db: Database, scanId: string, issues
           title: i.title.slice(0, 500),
           lastSeenScanId: scanId,
           ...(SYSTEM_STATUSES.has(t.status) ? { status: i.status } : {}),
+          ...(reopen ? { status: "reopened" as const, resolvedAt: null } : {}),
         })
         .where(eq(issueTrack.id, t.id));
+      if (reopen) {
+        reopened += 1;
+        statusEvents.push({
+          trackId: t.id,
+          fromStatus: t.status,
+          toStatus: "reopened",
+          userId: null,
+          scanId,
+          note: SYSTEM_EVENT_NOTES.reopened,
+        });
+      }
       if (systemChange)
         statusEvents.push({
           trackId: t.id,
@@ -273,7 +313,12 @@ export async function materializeScanIssues(db: Database, scanId: string, issues
       })),
     );
     for (const batch of chunks(checks)) await tx.insert(groundingCheck).values(batch);
-    return { issues: rows.length, newTracks: fresh.length, updatedTracks: existing.length };
+    return {
+      issues: rows.length,
+      newTracks: fresh.length,
+      updatedTracks: existing.length,
+      reopened,
+    };
   });
 }
 

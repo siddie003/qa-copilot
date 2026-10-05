@@ -6,6 +6,7 @@ export * from "./figma";
 export * from "./design-spec";
 export * from "./content";
 export * from "./pipeline";
+export * from "./comparison";
 export * from "./scan-auth";
 export * from "./logger";
 export * from "./redact";

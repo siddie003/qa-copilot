@@ -1,5 +1,5 @@
-import { SCANNER_KEYS, SEVERITIES, stepLabel } from "@qa/core";
-import { dashboardRepo, getDb } from "@qa/db";
+import { SCANNER_KEYS, SEVERITIES, stepLabel, type ComparisonSummary } from "@qa/core";
+import { comparisonsRepo, dashboardRepo, getDb } from "@qa/db";
 import { FolderKanban, Plus, Radar } from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
@@ -15,10 +15,26 @@ import { requirePageUser } from "@/server/session";
 
 export const metadata: Metadata = { title: "Dashboard" };
 
+function changeLine(c: { baseNumber: number; summary: ComparisonSummary }) {
+  const n = c.summary.counts;
+  const parts = [
+    n.new && `${n.new} new`,
+    n.reopened && `${n.reopened} reopened`,
+    n.resolved && `${n.resolved} resolved`,
+    n.changed && `${n.changed} changed`,
+  ].filter(Boolean);
+  return `vs scan #${c.baseNumber}: ${parts.length ? parts.join(" · ") : "no changes"}`;
+}
+
 export default async function DashboardPage() {
   const user = await requirePageUser();
   const d = await dashboardRepo.getDashboardSummary(getDb(), user.id);
   const c = d.issueCounts;
+  // Changes of recent scans vs an earlier scan, from cached comparisons (Phase 9).
+  const changes = await comparisonsRepo.latestCachedForTargets(
+    getDb(),
+    d.recentScans.map((s) => s.id),
+  );
 
   const header = (
     <PageHeader
@@ -180,6 +196,14 @@ export default async function DashboardPage() {
                       </Link>{" "}
                       <span className="text-muted">· Scan #{s.number}</span>
                       <div className="text-xs text-subtle">{formatDateTime(s.createdAt)}</div>
+                      {changes.get(s.id) && (
+                        <Link
+                          href={`/projects/${s.projectId}/history/compare?base=${changes.get(s.id)!.baseScanId}&target=${s.id}`}
+                          className="text-xs text-primary hover:underline"
+                        >
+                          {changeLine(changes.get(s.id)!)}
+                        </Link>
+                      )}
                     </div>
                     <div className="flex items-center gap-2">
                       {s.failedSteps > 0 && (

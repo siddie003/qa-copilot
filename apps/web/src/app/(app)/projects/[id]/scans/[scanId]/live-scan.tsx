@@ -65,10 +65,13 @@ export function LiveScan({
   projectId,
   initial,
   initialCaptures,
+  previousScan = null,
 }: {
   projectId: string;
   initial: ScanJson;
   initialCaptures: Capture[];
+  /** The earlier finished scan with issue records this scan is compared with (Phase 9). */
+  previousScan?: { id: string; number: number } | null;
 }) {
   const toast = useToast();
   const [scan, setScan] = useState(initial);
@@ -214,6 +217,14 @@ export function LiveScan({
               className={buttonClasses(running || issueCount > 0 ? "secondary" : "primary")}
             >
               View {totalFindings} finding{totalFindings === 1 ? "" : "s"}
+            </Link>
+          )}
+          {!running && previousScan && groundingRun?.status === "completed" && (
+            <Link
+              href={`/projects/${projectId}/history/compare?base=${previousScan.id}&target=${scan.id}`}
+              className={buttonClasses("secondary")}
+            >
+              Compare with scan #{previousScan.number}
             </Link>
           )}
           {!running && (

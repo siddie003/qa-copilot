@@ -8,7 +8,8 @@
     "./domain": "./src/domain.ts",
     "./figma": "./src/figma.ts",
     "./design-spec": "./src/design-spec.ts",
-    "./content": "./src/content.ts"
+    "./content": "./src/content.ts",
+    "./comparison": "./src/comparison.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json"

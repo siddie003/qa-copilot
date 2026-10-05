@@ -1,9 +1,19 @@
 import type http from "node:http";
 
+export type DemoSiteVariant = "v1" | "v2";
+
 export const MEMBERS_USER: string;
 export const MEMBERS_PASSWORD: string;
 export const HERO_PNG_BYTES: number;
-export function createDemoSiteServer(): http.Server;
+export const VARIANTS: DemoSiteVariant[];
+export function createDemoSiteServer(state?: { variant: DemoSiteVariant }): http.Server;
 export function startDemoSite(
   port?: number,
-): Promise<{ port: number; url: string; close: () => Promise<void> }>;
+  options?: { variant?: DemoSiteVariant },
+): Promise<{
+  port: number;
+  url: string;
+  variant: () => DemoSiteVariant;
+  setVariant: (variant: DemoSiteVariant) => void;
+  close: () => Promise<void>;
+}>;

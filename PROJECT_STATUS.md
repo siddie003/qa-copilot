@@ -14,11 +14,98 @@ _Last updated: 2026-10-05_
   2026-10-04; re-verified before Phase 7 started (typecheck, lint, format clean; 280/280 tests).
 - **Phase 7: AI interpretation + grounding.** Declared complete by the user on 2026-10-05;
   re-verified before Phase 8 started (typecheck clean; 357/357 tests).
-- Phases 6, 7 and 8 are **not committed** yet (see "Git checkpoints" below).
+- **Phase 8: Issue management + reporting.** Verified complete at the start of Phase 9
+  (typecheck clean; 394/394 tests).
+- Every phase through 9 has a git checkpoint commit (see "Git checkpoints" below).
 
 ## Current phase
-**Phase 8: Issue management + reporting.** Implemented and verified on 2026-10-05.
-**Awaiting approval ("APPROVED — CONTINUE").** Phase 9 not started.
+**Phase 9: Scan history + comparison.** Implemented and verified on 2026-10-05.
+**Awaiting approval ("APPROVED — CONTINUE").** Phase 10 not started.
+
+## Found at the start of Phase 9
+- Phase 8 verified from the repository: typecheck clean, 394/394 tests; Phase 0–8 docs match the
+  code. Phases 6–8 were uncommitted (checkpoint commits created first, see "Git checkpoints").
+- Already in place and reused: `issue_track` (stable identity per scanner rule / reference value,
+  status, first/last seen), per-scan `issue` occurrences with `issue_finding` links, finding
+  fingerprints, `issue_status_event` (system events with scan id), the `scan_comparison` table
+  (Phase 2, never written), the Scan history tab (plain scan list with a "Phase 9" note), the
+  bulk status API, the fixture site.
+- No blockers. Gaps closed: no comparison of scans, user statuses were never reopened, the
+  history tab had no history beyond a list, the fixture had no second version.
+
+## Phase 9 features implemented
+- **Comparison engine** (`@qa/core/comparison`, pure, browser-safe): every tracked issue of two
+  finished scans is New / Reopened / Changed / Resolved / Persistent / Not rechecked / Newly
+  checked, with finding-level detail (matched by fingerprint, viewport-class fallback) and a
+  reason built from the records. Resolved only if the target re-checked every finding (scanner
+  ran, page analyzable, viewport captured, no page-level or same-rule inconclusive check, no
+  link-check limit, unchanged design/content reference); otherwise Not rechecked, and the
+  reverse for New vs Newly checked. Reopened also covers issues seen before the base scan,
+  absent from it and found again. Unable-to-verify states stay visible (a verdict change is
+  "changed", never "resolved"). Performance lab-measurement differences (value, worst viewport)
+  are shown but are not changes; a crossed threshold is. Scans without issue records are "not
+  comparable" (steps still compared). Scanner/step status changes (now completes / no longer
+  completes / other) and warnings (URL, scanners, viewports, crawl limits, references, partial
+  scans).
+- **Reopen logic** (`materializeScanIssues`): resolved before the scan started + found again with
+  evidence → Reopened, `resolved_at` cleared, system event "Found again by this scan after it was
+  marked resolved."; inconclusive occurrences and fixes claimed while the scan ran do not reopen;
+  in progress / ignored kept; idempotent. Scans never resolve issues by themselves.
+- **Data/API:** `comparisonsRepo` (records loader, track history, `scan_comparison` summary
+  cache — existing table, **no migration**), `server/comparisons.ts`;
+  `GET /api/v1/projects/:id/comparisons?base=&target=` (defaults to the latest comparable pair;
+  400 reversed/same, 404 foreign/malformed, 409 unfinished/nothing to compare) and
+  `GET /api/v1/projects/:id/history` (scans with issue counts, changes vs previous, trend).
+- **UI (historical dashboard):** Scan history tab — latest changes (tiles link to the comparison
+  filtered by category), issues-per-scan chart by severity (server-rendered SVG, bars link to
+  that scan's comparison), scan picker, history table with needs-review / unable-to-verify counts
+  and change badges, reasons for scans without a comparison. Compare page
+  (`/projects/:id/history/compare`) — category tiles/filter, every issue with reason, severity,
+  verdict, finding counts, current status and finding-level detail, scanner/step status table,
+  warnings, "not comparable" explanations, and a one-click audited "Set N still-open issue(s) to
+  Resolved" for the latest scan. "Compare with scan #n" on finished scans; change lines for recent
+  scans on the dashboard (cached summaries only).
+- Accessibility scanner now records pages beyond its 25-page limit as not analyzed.
+- Fixture site versions v1/v2 (`POST /__fixture/variant`, `X-Fixture-Variant` request header,
+  CLI/`DEMO_SITE_VARIANT`), documented with the expected comparison results.
+
+## Phase 9 tests (2026-10-05)
+- Typecheck (root + all workspaces), ESLint, Prettier: clean. `npm run check:tsx-capture`: pass.
+- `vitest`: **426 passed** (45 files; was 394). New:
+  - comparison engine (20): every category and its precedence, finding-level pairing (incl.
+    viewport-class change), coverage rules (page not crawled / HTTP 500, scanner failed / skipped /
+    not selected / inconclusive step, viewport missing / capture failed, page-level and same-rule
+    inconclusive checks, link-check limit, design reference version / content documents changed),
+    partly re-checked issues, persistent issues with pages that were not re-checked, reopened by
+    status event and by reappearance (and newly checked when the base could not see it),
+    unable-to-verify verdicts, performance measurement variance vs threshold crossing, not
+    comparable scans, step directions, setting warnings, invalid pairs, page keys
+  - scanner compatibility (3): gap-check labels exist in the scanners; `pageKey` = crawler
+    normalization
+  - API on the real database (7): nothing to compare (409), running scan (409), default pair and
+    every category from records, cache row, failed scan not comparable, pair validation
+    (400/404, other users and projects), reopen rule (resolved → reopened with event, inconclusive
+    keeps resolved, idempotent, issue detail shows the event), fix claimed after the scan started
+    not overruled (and reported as reappeared), history items / breakdown / trend / cache
+  - **real fixture scans with Chromium (Phase 9 exit criterion):** v1 → v2 → v1 on one project:
+    fixes resolved, new defect new, user-resolved issue reopened (status + event), `/wide` (HTTP
+    500) not rechecked and then newly checked, link issue changed, nothing else changed; v1 vs v1
+    zero new / resolved / reopened / changed
+  - Phase 7 issue-step test updated for the reopen rule (resolved → reopened; in progress kept)
+- `next build`: pass. Playwright e2e: **9/9** (new `tests/e2e/history.spec.ts`: two real scans
+  with per-project variant header, API categories, history tiles = API counts, chart, table,
+  compare page categories / links / finding details, category filter, reversed pair refused,
+  "Compare with scan #1" from the scan page; axe and no horizontal overflow at 1440px and 390px).
+  The new spec waits for its last page to settle (see "Known issues" for a timing-dependent server
+  log line).
+- Manual checks (production build, real worker, fixture; throwaway accounts deleted):
+  - 3 scans (v1, v2 with one issue resolved by the user before, v1): #1→#2 = 2 new, 1 reopened,
+    1 changed, 4 resolved, 30 persistent, 1 not rechecked; #2→#3 = 4 reopened, 1 changed,
+    2 resolved, 1 newly checked; history, chart, compare page, confirm-resolved action (statuses
+    and audit), newly-checked reason, dark mode, no console errors.
+  - 2 scans of the same version with all six scanners: found TTFB 1523 → 1515 ms and the worst
+    viewport flipping, which made performance issues "changed"; fixed (measurement rule) and
+    re-checked: all 40 issues persistent.
 
 ## Found at the start of Phase 8
 - Phase 7 verified from the repository: typecheck clean, 357/357 vitest; all Phase 0–7 docs match
@@ -34,12 +121,10 @@ _Last updated: 2026-10-05_
   ("planned for Phase 8").
 
 ## Git checkpoints
-Phases 6, 7 and 8 are uncommitted in the working tree (last commit: Phase 5). In the Phase 8
-session, creating separate checkpoint commits for Phase 6 (tree of git object `dfba1be`) and
-Phase 7 was blocked by the agent's tool permission policy (it used `git reset --soft`), so nothing
-was committed and the history was not touched. To create the checkpoints manually:
-`git commit-tree "dfba1be^{tree}" -p HEAD -m "Phase 6 …"` → `git reset --soft <that commit>` →
-`git add -A` → commit Phases 7 + 8 (or ask the agent again after allowing it).
+Created at the start of Phase 9 (2026-10-05) on `main` without touching the working tree:
+`5b2579b` Phase 6 (tree of `dfba1be`) and `8434ee8` Phases 7 + 8 (no intermediate snapshot
+existed, so they share a commit). Phase 9 has its own commit ("Phase 9: scan history and
+comparison").
 
 ## Phase 8 features implemented
 - **Issue explorer** (`/issues`, project Issues tab, `GET /api/v1/issues`,
@@ -283,7 +368,9 @@ was committed and the history was not touched. To create the checkpoints manuall
 - The pre-existing scroll-region tables (projects, scans) have the same latent `sr-only` overflow
   pattern fixed in the newer tables (the issues and reports tables were rebuilt in Phase 8 with
   the fix); they pass the current audits, so they were left unchanged.
-- Observed in e2e logs: Next.js `MaxListenersExceededWarning` on the gzip stream (not investigated).
+- Observed in e2e logs: Next.js `MaxListenersExceededWarning` on the gzip stream (not investigated),
+  and once per full run, in a varying spec, "The destination stream closed early" (a streamed
+  response aborted when the test navigates away; timing-dependent, no test fails, app unaffected).
 - AI (Phase 7): not tested against the live Anthropic or OpenAI APIs (no key in this
   environment). Both providers are tested against local mocks of the documented wire formats, and
   the full worker path was exercised manually through the real SDK against such a mock. The
@@ -291,8 +378,9 @@ was committed and the history was not touched. To create the checkpoints manuall
   if an account rejects it. Fact grounding is a heuristic safety net: prose without numbers,
   colors, links, quotes or ids cannot be checked this way (claims and the severity bound limit the
   risk); in hyphenated ranges ("10-20px") only the first number is checked.
-- Existing tracks are matched by fingerprint and keep user statuses; resolving/reopening across
-  scans is Phase 9. Scans run before Phase 7 have no issues (their findings stay available).
+- Existing tracks are matched by fingerprint and keep user statuses, except the Phase 9 reopen
+  rule (resolved + found again with evidence → Reopened). Scans run before Phase 7 have no issues
+  (their findings stay available) and are not comparable at issue level (steps still are).
 - The local `.env` sets `AI_TIMEOUT_MS=120000` and `AI_MAX_OUTPUT_TOKENS=8000` explicitly; the new
   defaults (300000 / 16000) only apply where those variables are unset.
 - Reports (Phase 8) are snapshots: issue statuses are those at generation time (regenerate after
@@ -301,16 +389,24 @@ was committed and the history was not touched. To create the checkpoints manuall
   PDF launches its own short-lived Chromium (a few seconds).
 - Explorer filters on verdict, confidence and URL use the latest occurrence of each issue.
 - A user who sets an issue back to *Open* hands it back to the system: a later scan may set it to
-  *Inconclusive* if the evidence becomes inconclusive (recorded as a system event). Automatic
-  reopening of resolved issues and resolved/persistent comparisons are Phase 9.
+  *Inconclusive* if the evidence becomes inconclusive (recorded as a system event).
 - Stored files (screenshots, reports) are not removed when rows disappear through database
   cascades (e.g. a deleted user); deleting a report through the app removes its file. Storage
   garbage collection is a Phase 10 hardening item.
+- Scan comparison (Phase 9): an issue is one scanner rule across pages, so per-page differences
+  show as "changed" with finding-level detail (new / no longer found / not rechecked per page).
+  "Re-checked" relies on the scanners' stored inconclusive-check labels for page-level gaps (kept
+  in step by a test). Performance values close to a threshold can cross it between runs (lab
+  variance); that is reported as a change by design. Comparing scans of different hosts matches
+  pages by path (a warning is shown). Scans never resolve issues by themselves; users confirm
+  fixes (one click on the comparison of the latest scan). Reports cover one scan and do not include
+  a comparison. The history page computes missing comparison summaries on first view (cached
+  afterwards); the dashboard only shows cached ones.
 - Dev-tool `npm audit` findings, ESLint 9 pin, missing Docker unchanged.
 
 ## Next phase
-Phase 9: scan history, comparison of two scans (new / resolved / persistent / reopened / changed /
-not rechecked), reopen logic, historical dashboard (starts only after approval).
+Phase 10: hardening (rate limits, upload fuzzing, IDOR tests, CSP, storage garbage collection),
+Docker, README/DEPLOYMENT and the full acceptance workflow (starts only after approval).
 
 ## Required environment variables
 `DATABASE_URL`, `BETTER_AUTH_SECRET` (required); `ENCRYPTION_KEY` (required to store site

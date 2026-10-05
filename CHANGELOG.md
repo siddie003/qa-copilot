@@ -2,6 +2,27 @@
 
 ## [Unreleased]
 
+### Phase 9: Scan history and comparison (2026-10-05)
+#### Added
+- Comparison of two finished scans (`@qa/core/comparison`): new, reopened, changed, resolved,
+  persistent, not rechecked and newly checked issues with finding-level detail and reasons;
+  scanner/step status changes; warnings for different settings; "not comparable" for scans
+  without issue records. Resolved only when the target scan re-checked every finding.
+- Reopen logic: resolved issues found again with evidence become Reopened (audited system event).
+- Scan history tab (latest changes, issues-per-scan chart, scan picker, history table), compare
+  page with confirm-resolved action, "Compare with scan #n" on scans, changes on the dashboard.
+- API `GET /api/v1/projects/:id/comparisons`, `GET /api/v1/projects/:id/history`; summaries
+  cached in `scan_comparison`.
+- Fixture site versions v1/v2 (`POST /__fixture/variant`, `X-Fixture-Variant` header).
+- Unit, integration (real DB; real Chromium v1 → v2 → v1 scans) and end-to-end tests.
+#### Changed
+- The accessibility scanner reports pages beyond its 25-page limit as not analyzed.
+- Issues that a user marked resolved are now reopened by a scan that finds them again with
+  evidence (previously user statuses were always kept); the Phase 7 test was updated accordingly.
+#### Fixed
+- Comparisons do not report performance issues as changed when only a lab measurement varied
+  between page loads (measured value or worst viewport); a crossed threshold still counts.
+
 ### Phase 8: Issue management and reporting (2026-10-05)
 #### Added
 - Issue explorer (all projects and per project): filters for severity, status, verdict

@@ -63,7 +63,8 @@ export const accessibilityScanner: Scanner = {
   idPrefix: "A11Y",
   version: "1.0.0",
   async run(ctx: ScannerContext) {
-    const pages = analyzablePages(ctx.pages).slice(0, MAX_PAGES);
+    const analyzable = analyzablePages(ctx.pages);
+    const pages = analyzable.slice(0, MAX_PAGES);
     const checks: CheckSummary = { evaluated: 0, inconclusive: [] };
     const merged = new Map<string, Merged>();
     let axeVersion = "unknown";
@@ -177,6 +178,14 @@ export const accessibilityScanner: Scanner = {
       },
       ctx.signal,
     );
+    // Pages beyond the limit were not analyzed: say so per page (scan comparisons then never
+    // count their earlier accessibility issues as resolved).
+    for (const p of analyzable.slice(MAX_PAGES))
+      checks.inconclusive.push({
+        check: "axe-core analysis",
+        reason: `Not analyzed: accessibility checks are limited to the first ${MAX_PAGES} pages of a scan`,
+        pageUrl: displayUrl(p),
+      });
 
     const findings = [...merged.values()].map(({ finding, viewports }) => {
       const list = [...viewports];

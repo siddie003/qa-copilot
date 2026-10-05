@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 // Controlled fixture website used by integration/E2E tests and demo mode.
 // Every behavior and defect here is intentional and documented in fixtures/demo-site/README.md.
-// Usage: node fixtures/demo-site/server.mjs [port]   (default 4100, binds 127.0.0.1)
+// Usage: node fixtures/demo-site/server.mjs [port] [variant]   (default 4100 and v1, binds 127.0.0.1)
+// Variant "v2" is the "next release" of the site (some defects fixed, one added, one page
+// failing) used to verify scan comparisons; switch at runtime with POST /__fixture/variant.
 import { randomBytes } from "node:crypto";
 import http from "node:http";
 import { fileURLToPath } from "node:url";
@@ -39,8 +41,11 @@ ${body}
 </body>
 </html>`;
 
+export const VARIANTS = ["v1", "v2"];
+
+/** Page renderers; `v` is the site variant ("v1" = documented defects, "v2" = next release). */
 const PAGES = {
-  "/": () =>
+  "/": (v) =>
     layout(
       "Demo Store – Home",
       `<h1>Welcome to the Demo Store</h1>
@@ -73,11 +78,13 @@ const PAGES = {
 </script>`,
       {
         // Render-blocking script and invalid JSON-LD (missing closing brace) are intentional.
+        // v2 fixes the JSON-LD.
         extraHead: `<script src="/assets/app.js"></script>
-<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Organization", "name": "Demo Store"</script>`,
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Organization", "name": "Demo Store"${v === "v2" ? "}" : ""}</script>`,
       },
     ),
-  "/about": () =>
+  // v2 adds the missing meta description and the image's alt text.
+  "/about": (v) =>
     layout(
       "About us",
       `<h1>About us</h1>
@@ -86,8 +93,13 @@ const PAGES = {
 <h2>Our mission</h2>
 <p>Make QA simple for every team. Read our <a href="/blog/">blog</a> for updates.</p>
 <p><a class="btn-primary" href="/blog/">Contact our team</a></p>
-<img src="/images/team.png" width="40" height="40">`,
-      { description: null },
+<img src="/images/team.png"${v === "v2" ? ' alt="Our team"' : ""} width="40" height="40">`,
+      {
+        description:
+          v === "v2"
+            ? "Learn about the Demo Store team, our mission and how we ship quality demo products."
+            : null,
+      },
     ),
   "/products": () =>
     layout(
@@ -119,8 +131,12 @@ const PAGES = {
       "Blog",
       `<h1>Blog</h1><a href="/blog/post-1">Post 1</a> <a href="/blog/post-2">Post 2</a>`,
     ),
-  "/blog/post-1": () =>
-    layout("Post 1", `<h1>Post 1</h1><p>First post.</p><a href="/blog/archive">Archive</a>`),
+  // v2 introduces a new defect: the post has no H1 (its heading became an H2).
+  "/blog/post-1": (v) =>
+    layout(
+      "Post 1",
+      `${v === "v2" ? "<h2>Post 1</h2>" : "<h1>Post 1</h1>"}<p>First post.</p><a href="/blog/archive">Archive</a>`,
+    ),
   "/blog/post-2": () =>
     layout(
       "Post 2",
@@ -193,10 +209,40 @@ const TEAM = makePng(40, 40);
 
 const BASIC = `Basic ${Buffer.from(`${MEMBERS_USER}:${MEMBERS_PASSWORD}`).toString("base64")}`;
 
-export function createDemoSiteServer() {
+const VARIANT_PATH = "/__fixture/variant";
+
+/**
+ * Creates the fixture server. `state.variant` selects the site version and can be changed while
+ * the server runs (directly, or with `POST /__fixture/variant` and the variant name as body).
+ * A request header `X-Fixture-Variant: v1|v2` overrides it for that request only, so a project
+ * can scan another variant (sent as its custom-header site credentials) without affecting other
+ * scans of the same server. The toggle path is not linked from any page, so scans never find it.
+ */
+export function createDemoSiteServer(state = { variant: "v1" }) {
   return http.createServer((req, res) => {
     const url = new URL(req.url ?? "/", "http://fixture.local");
     const path = url.pathname;
+    if (path === VARIANT_PATH) {
+      const reply = () => {
+        res.writeHead(200, { "content-type": "text/plain" });
+        res.end(state.variant);
+      };
+      if (req.method !== "POST") return reply();
+      let body = "";
+      req.on("data", (chunk) => (body += chunk));
+      req.on("end", () => {
+        const next = body.trim();
+        if (!VARIANTS.includes(next)) {
+          res.writeHead(400, { "content-type": "text/plain" });
+          return res.end(`Unknown variant; use one of: ${VARIANTS.join(", ")}`);
+        }
+        state.variant = next;
+        reply();
+      });
+      return;
+    }
+    const requested = req.headers["x-fixture-variant"];
+    const variant = VARIANTS.includes(requested) ? requested : state.variant;
     // Version disclosure and cookie without security flags are intentional.
     res.setHeader("Server", "DemoServer/1.2.3");
     if (path === "/robots.txt") {
@@ -208,7 +254,8 @@ export function createDemoSiteServer() {
       res.writeHead(status, { location });
       return res.end();
     }
-    if (path === "/server-error") {
+    // v2: the wide-layout page fails, so its earlier issues cannot be re-checked.
+    if (path === "/server-error" || (path === "/wide" && variant === "v2")) {
       res.writeHead(500, { "content-type": "text/html" });
       return res.end("<h1>Internal error</h1>");
     }
@@ -247,7 +294,7 @@ export function createDemoSiteServer() {
         const headers = { "content-type": "text/html; charset=utf-8" };
         if (path === "/") headers["set-cookie"] = "demo_session=abc123; Path=/";
         res.writeHead(200, headers);
-        res.end(page());
+        res.end(page(variant));
       };
       if (path === "/slow") return void setTimeout(send, 1500);
       return send();
@@ -260,8 +307,10 @@ export function createDemoSiteServer() {
 export const HERO_PNG_BYTES = HERO.length;
 
 /** Starts the fixture on 127.0.0.1. Port 0 picks a free port. */
-export function startDemoSite(port = 4100) {
-  const server = createDemoSiteServer();
+export function startDemoSite(port = 4100, { variant = "v1" } = {}) {
+  if (!VARIANTS.includes(variant)) throw new Error(`Unknown fixture variant: ${variant}`);
+  const state = { variant };
+  const server = createDemoSiteServer(state);
   return new Promise((resolve, reject) => {
     server.once("error", reject);
     server.listen(port, "127.0.0.1", () => {
@@ -269,6 +318,11 @@ export function startDemoSite(port = 4100) {
       resolve({
         port: actual,
         url: `http://localhost:${actual}/`,
+        variant: () => state.variant,
+        setVariant: (next) => {
+          if (!VARIANTS.includes(next)) throw new Error(`Unknown fixture variant: ${next}`);
+          state.variant = next;
+        },
         close: () => new Promise((r) => server.close(() => r())),
       });
     });
@@ -277,5 +331,8 @@ export function startDemoSite(port = 4100) {
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const port = Number(process.argv[2] ?? process.env.DEMO_SITE_PORT ?? 4100);
-  startDemoSite(port).then(({ url }) => console.log(`Demo fixture site running at ${url}`));
+  const variant = process.argv[3] ?? process.env.DEMO_SITE_VARIANT ?? "v1";
+  startDemoSite(port, { variant }).then(({ url }) =>
+    console.log(`Demo fixture site (${variant}) running at ${url}`),
+  );
 }

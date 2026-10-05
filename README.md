@@ -4,7 +4,7 @@ AI-powered website QA, design and brand compliance platform. You provide a desig
 (Figma or brand guidelines), approved content and a website URL; QA Copilot crawls the site,
 runs evidence-based QA scanners, and turns the findings into developer-ready issues and reports.
 
-> **Status:** Phase 8 (issue management + reporting). Scan history and comparison follow in Phase 9. See [PROJECT_STATUS.md](PROJECT_STATUS.md) and
+> **Status:** Phase 9 (scan history + comparison). Hardening, Docker and deployment follow in Phase 10. See [PROJECT_STATUS.md](PROJECT_STATUS.md) and
 > [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). A full README (Docker, deployment, scanners, AI
 > configuration) is completed in Phase 10.
 
@@ -128,6 +128,50 @@ history**. Users set *Open*, *In progress*, *Resolved* or *Ignored* (with an opt
 Every change is recorded with who made it, when, the note and the previous status; detections
 and evidence-based status changes made by scans are recorded as system events with the scan.
 
+**Reopen rule:** when a scan finds an issue again that a user marked *Resolved* before that scan
+started, its status becomes *Reopened* (system event "Found again by this scan after it was marked
+resolved."). An occurrence that is only *unable to verify* does not reopen it, and a fix claimed
+while the scan was already running is not overruled by that scan. *In progress* and *Ignored* are
+kept. Scans never set an issue to *Resolved* on their own; the comparison page offers to confirm
+fixes it found (an audited bulk change).
+
+## Scan history and comparison
+
+The project's **Scan history** tab shows the latest changes (the newest scan compared with the
+previous one), a chart of issues per scan by severity (each bar opens that scan's comparison),
+a scan picker, and every scan with its issue counts (needs review, unable to verify) and its
+changes compared with the previous comparable scan. A comparable scan is a finished scan whose
+evidence-validation step created issue records; scans without them (failed early, cancelled, or
+run before issue tracking) are listed with the reason and skipped. Finished scans also have a
+**Compare with scan #n** button, and the dashboard shows the latest changes of recent scans.
+
+**Compare two scans** (`/projects/:id/history/compare?base=&target=`) classifies every tracked
+issue of either scan, computed only from the stored records of the two scans:
+
+| Category | Meaning |
+|---|---|
+| New | In the target scan only; the base scan checked the same pages with the same scanner |
+| Reopened | Marked resolved and found again by the target scan, or seen in an earlier scan, absent from the base scan and found again |
+| Changed | In both, with a different severity or verdict, findings no longer found or new findings, or different observed values |
+| Resolved | In the base scan only, and the target scan re-checked every one of its findings |
+| Persistent | In both with the same severity, verdict and findings |
+| Not rechecked | In the base scan only, but the target scan could not re-check it — never counted as resolved |
+| Newly checked | In the target scan only, but the base scan could not have seen it — never counted as new |
+
+"Re-checked" means: the scanner ran (completed or inconclusive, not failed/skipped/not selected),
+the page was crawled and analyzable (no error, HTTP < 400, HTML), the finding's viewport was
+captured without error, the scanner did not report that page (or that rule on the page) as
+unverifiable, a scanner-wide limit was not hit (link-check limit), and for design/content issues
+the design reference / approved content did not change. The reason is shown for every issue and,
+inside it, for every finding (matched by fingerprint: new, no longer found, changed values,
+unchanged, not rechecked, newly checked). Performance values are lab measurements that vary
+between page loads: a different measured value or worst viewport is shown but is not counted as a
+change; crossing a threshold (a different severity) is. The page also lists scanner and step status changes
+(now completes / no longer completes / other changes) and warnings about different settings
+(website URL, scanners, viewports, crawl limits, references, scans that completed with failures).
+Comparing a scan without issue records still compares the steps and says why issues cannot be
+compared. Summaries are cached in `scan_comparison` (recomputed when the rules change).
+
 ## Reports
 
 Reports are generated on demand from a **finished** scan (project **Reports** tab, or the
@@ -178,6 +222,11 @@ To try it locally, run the controlled fixture website and scan `http://localhost
 npm run demo:site
 ```
 
+To try a comparison, the fixture has a second version (`v2`: some defects fixed, one added, one
+page failing). Scan, then switch with `curl -X POST --data v2 http://localhost:4100/__fixture/variant`
+(or start it with `node fixtures/demo-site/server.mjs 4100 v2`) and scan again. A project can also
+request a version with a custom-header site credential `X-Fixture-Variant: v2`.
+
 Scanning private or internal addresses is blocked unless the `host:port` is listed in
 `SCAN_ALLOWED_PRIVATE_HOSTS`. Checks run before every request, at every redirect hop, at
 connection time (DNS rebinding) and for every request made by the browser.
@@ -221,6 +270,8 @@ All `/api/v1` endpoints except health checks require a session cookie (sign in v
 | GET | `/api/v1/scans/:id`, `/events` (SSE), `/captures`, `/findings` | Scan status, live events, captures, findings |
 | GET | `/api/v1/scans/:id/issues?grounding=` | Issues of a scan with source findings, grounding checks and AI requests |
 | GET | `/api/v1/issues`, `/api/v1/projects/:id/issues` | Tracked issues; filters `severity`, `status`, `verdict` (confirmed/potential/unverified), `category`, `url`, `minConfidence` (0–100), `since` (1d/7d/30d/90d), `q`, `sort`, `page`, `pageSize`, `projectId` |
+| GET | `/api/v1/projects/:id/comparisons?base=&target=` | Comparison of two finished scans (defaults: latest comparable scan and the one before it); 400 reversed/same scan, 404 foreign scans, 409 unfinished or nothing to compare |
+| GET | `/api/v1/projects/:id/history?page=&pageSize=` | Scan history with issue counts, changes vs the previous comparable scan and the trend |
 | GET | `/api/v1/issues/:id?scanId=` | Issue detail: occurrences, selected occurrence with findings, evidence and grounding checks, status history |
 | PATCH | `/api/v1/issues/:id/status` | Set the status `{ status: open|in_progress|resolved|ignored, note? }` (audited) |
 | POST | `/api/v1/issues/status` | Bulk status change `{ ids (≤ 100), status, note? }` (all or nothing) |
@@ -252,8 +303,9 @@ automatically and truncate tables between tests. They refuse to run against a da
 name does not end in `_test`.
 
 End-to-end tests (Playwright): accessibility audits (axe-core, WCAG 2.2 A/AA, desktop and 390px
-mobile), a full scan from the UI against the fixture site, references and comparison, and the
-issue workflow with report generation and downloads. They start a production web server
+mobile), a full scan from the UI against the fixture site, references and comparison, the
+issue workflow with report generation and downloads, and scan history with a comparison of two
+real scans of the fixture's v1 and v2. They start a production web server
 on port 3100, a worker (health port 3191) and the fixture site on 4100 (run `npm run build`
 first; your dev servers are not touched) and remove their throwaway accounts and screenshots:
 
