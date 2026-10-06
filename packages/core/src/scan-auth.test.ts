@@ -24,6 +24,30 @@ describe("scanAuthSchema", () => {
   ])("rejects %o", (input) => {
     expect(scanAuthSchema.safeParse(input).success).toBe(false);
   });
+
+  // Phase 10: values are sent as HTTP headers; line breaks would inject extra headers.
+  const CRLF = String.fromCharCode(13, 10);
+  it.each([
+    { type: "header", name: "X-Api-Key", value: `abc${CRLF}X-Injected: 1` },
+    { type: "header", name: "X-Api-Key", value: `abc${String.fromCharCode(0)}` },
+    { type: "basic", username: `qa${CRLF}`, password: "p" },
+    { type: "basic", username: "qa", password: `p${String.fromCharCode(10)}w` },
+    { type: "basic", username: "qa:admin", password: "p" },
+  ])("rejects control characters and ambiguous Basic usernames: %o", (input) => {
+    expect(scanAuthSchema.safeParse(input).success).toBe(false);
+  });
+
+  it("still accepts tabs and printable punctuation in secret values", () => {
+    const tab = String.fromCharCode(9);
+    expect(
+      scanAuthSchema.safeParse({ type: "header", name: "X-Token", value: `a${tab}b:c=d;e` })
+        .success,
+    ).toBe(true);
+    expect(
+      scanAuthSchema.safeParse({ type: "basic", username: "qa@example.com", password: "p:w!" })
+        .success,
+    ).toBe(true);
+  });
 });
 
 describe("authHeadersFor", () => {

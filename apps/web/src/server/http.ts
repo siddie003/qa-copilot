@@ -54,12 +54,17 @@ export function apiHandler<P = unknown>(route: string, handler: RouteHandler<P>)
       };
       if (problem.status >= 500) log.error({ ...fields, ...errorFields(err) }, "request failed");
       else log.warn(fields, "request rejected");
+      const retryAfter =
+        err instanceof AppError && err.code === "RATE_LIMITED"
+          ? (err.details as { retryAfterSeconds?: number } | undefined)?.retryAfterSeconds
+          : undefined;
       return NextResponse.json(problem, {
         status: problem.status,
         headers: {
           "content-type": "application/problem+json",
           "x-request-id": requestId,
           "cache-control": "no-store",
+          ...(retryAfter ? { "retry-after": String(retryAfter) } : {}),
         },
       });
     }

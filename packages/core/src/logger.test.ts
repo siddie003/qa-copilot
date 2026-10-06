@@ -82,3 +82,15 @@ describe("maskUrlCredentials", () => {
     expect(maskUrlCredentials("not a url")).toBe("[unparseable url]");
   });
 });
+
+describe("errorFields (query errors)", () => {
+  it("never logs bound query parameters but keeps the database cause", () => {
+    const cause = Object.assign(new Error("connection terminated"), { code: "57P01" });
+    const err = new Error('Failed query: select 1 where "token" = $1\nparams: TOKEN-VALUE-123', {
+      cause,
+    });
+    const fields = errorFields(err);
+    expect(JSON.stringify(fields)).not.toContain("TOKEN-VALUE-123");
+    expect(fields).toMatchObject({ errCode: "57P01", errCause: "connection terminated" });
+  });
+});

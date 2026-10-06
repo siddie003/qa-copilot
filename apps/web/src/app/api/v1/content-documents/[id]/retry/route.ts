@@ -11,4 +11,5 @@ export const POST = authedHandler<Params>(
   "POST /api/v1/content-documents/:id/retry",
   async (_req, { user, params }) =>
     json(await retryContentDocument(user.id, (await params).id), { status: 202 }),
+  { rateLimit: "reference" },
 );

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ConfigError, describeConfig, parseConfig } from "./config";
+import { ConfigError, configWarnings, describeConfig, parseConfig } from "./config";
 
 const base = {
   DATABASE_URL: "postgres://qa:secret-pw@localhost:5432/qa_copilot",
@@ -106,5 +106,63 @@ describe("describeConfig", () => {
     expect(text).not.toContain("x".repeat(40));
     expect(text).not.toContain(base.BETTER_AUTH_SECRET);
     expect(describeConfig(cfg).figmaConfigured).toBe(true);
+  });
+});
+
+describe("Phase 10 settings", () => {
+  it("defaults to safe values", () => {
+    const cfg = parseConfig(base);
+    expect(cfg.TRUSTED_PROXIES).toEqual([]);
+    expect(cfg.CLIENT_IP_HEADER).toBe("x-forwarded-for");
+    expect(cfg.RATE_LIMIT_ENABLED).toBe(true);
+    expect(cfg.WORKER_HEALTH_HOST).toBe("127.0.0.1");
+    expect(cfg.WORKER_SHUTDOWN_GRACE_MS).toBe(20_000);
+  });
+
+  it("parses trusted proxies and rejects anything that is not an IP or CIDR range", () => {
+    const cfg = parseConfig({
+      ...base,
+      TRUSTED_PROXIES: " 10.0.0.1, 172.16.0.0/12 ,fd00::/8 ",
+      CLIENT_IP_HEADER: "X-Real-IP",
+    });
+    expect(cfg.TRUSTED_PROXIES).toEqual(["10.0.0.1", "172.16.0.0/12", "fd00::/8"]);
+    expect(cfg.CLIENT_IP_HEADER).toBe("x-real-ip");
+    expect(issuesOf({ ...base, TRUSTED_PROXIES: "proxy.internal" }).map((i) => i.variable)).toEqual(
+      ["TRUSTED_PROXIES.0"],
+    );
+    expect(issuesOf({ ...base, CLIENT_IP_HEADER: "x forwarded" }).map((i) => i.variable)).toEqual([
+      "CLIENT_IP_HEADER",
+    ]);
+  });
+
+  it("warns about risky production settings only in production", () => {
+    expect(configWarnings(parseConfig(base))).toEqual([]);
+    const prod = {
+      ...base,
+      NODE_ENV: "production",
+      ENCRYPTION_KEY: "a".repeat(64),
+    };
+    const risky = configWarnings(
+      parseConfig({
+        ...prod,
+        APP_URL: "http://qa.example.com",
+        SCAN_ALLOWED_PRIVATE_HOSTS: "localhost:4100",
+        RATE_LIMIT_ENABLED: "false",
+      }),
+    );
+    expect(risky.join("\n")).toMatch(/APP_URL is not HTTPS/);
+    expect(risky.join("\n")).toMatch(/localhost:4100/);
+    expect(risky.join("\n")).toMatch(/AUTH_ALLOW_SIGNUP=true/);
+    expect(risky.join("\n")).toMatch(/RATE_LIMIT_ENABLED=false/);
+    expect(risky.join("\n")).toMatch(/TRUSTED_PROXIES is empty/);
+    const hardened = configWarnings(
+      parseConfig({
+        ...prod,
+        APP_URL: "https://qa.example.com",
+        AUTH_ALLOW_SIGNUP: "false",
+        TRUSTED_PROXIES: "10.0.0.2",
+      }),
+    );
+    expect(hardened).toEqual([]);
   });
 });

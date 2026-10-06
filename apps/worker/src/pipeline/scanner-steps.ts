@@ -1,4 +1,4 @@
-import { errorFields, type Logger } from "@qa/core";
+import { errorFields, publicErrorMessage, type Logger } from "@qa/core";
 import type { FetchOptions, RobotsRules } from "@qa/crawler";
 import { normalizeUrl } from "@qa/crawler";
 import { pipelineRepo, type Database } from "@qa/db";
@@ -157,6 +157,17 @@ export async function runScannerStep(
   ctx: ScannerContext,
 ): Promise<ScannerStepOutcome> {
   const result = await scanner.run(ctx);
+  // A step that was stopped (timeout, cancellation, shutdown) has already been recorded; storing
+  // its findings now could add findings after the scan's issues were created.
+  if (ctx.signal.aborted)
+    return {
+      status: "failed",
+      error: "Stopped before its findings were stored",
+      findingCount: 0,
+      toolName: result.toolName,
+      toolVersion: result.toolVersion,
+      checks: result.checks as unknown as Record<string, unknown>,
+    };
   const valid = [];
   let rejected = 0;
   for (const f of result.findings) {
@@ -211,7 +222,7 @@ export async function runScannerStep(
     env.log.error(errorFields(err), "storing findings failed");
     return {
       status: "failed",
-      error: `Findings could not be stored: ${(err as Error).message}`,
+      error: `Findings could not be stored: ${publicErrorMessage(err)}`,
       findingCount: 0,
       toolName: result.toolName,
       toolVersion: result.toolVersion,

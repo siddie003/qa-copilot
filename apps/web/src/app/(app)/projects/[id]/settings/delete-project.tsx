@@ -43,7 +43,8 @@ export function DeleteProject({
         Delete project
       </h2>
       <p className="mt-1 text-sm text-muted">
-        Removes the project and its scan history from all views. This cannot be undone from the
+        Removes the project and its scan history from all views, stops its queued or running scans
+        and deletes its stored site credentials and Figma token. This cannot be undone from the
         application.
       </p>
       <Button variant="danger" className="mt-4" onClick={() => setOpen(true)}>
@@ -52,7 +53,7 @@ export function DeleteProject({
       <ConfirmDialog
         open={open}
         title={`Delete “${projectName}”?`}
-        description="The project, its references and its scan history will no longer be accessible."
+        description="The project, its references and its scan history will no longer be accessible. Queued and running scans are stopped; stored site credentials are deleted."
         confirmLabel={pending ? "Deleting…" : "Delete project"}
         confirmText={projectName}
         pending={pending}

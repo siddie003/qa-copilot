@@ -15,4 +15,5 @@ export const POST = authedHandler<Params>(
     log.info({ projectId: id, referenceId: refId }, "reference queued again");
     return json(ref, { status: 202 });
   },
+  { rateLimit: "reference" },
 );

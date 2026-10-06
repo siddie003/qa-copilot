@@ -2,8 +2,11 @@
 // The output is a valid Office Open XML package / PDF 1.4 file that real parsers read.
 import zlib from "node:zlib";
 
-/** Minimal ZIP writer (stored or deflated entries). */
-export function buildZip(files, { deflate = true } = {}) {
+/**
+ * Minimal ZIP writer (stored or deflated entries). `declaredSizes` overrides the uncompressed
+ * size written into the headers (to build archives that lie about their content in tests).
+ */
+export function buildZip(files, { deflate = true, declaredSizes = {} } = {}) {
   const locals = [];
   const central = [];
   let offset = 0;
@@ -19,7 +22,7 @@ export function buildZip(files, { deflate = true } = {}) {
     local.writeUInt16LE(deflate ? 8 : 0, 8);
     local.writeUInt32LE(crc, 14);
     local.writeUInt32LE(packed.length, 18);
-    local.writeUInt32LE(data.length, 22);
+    local.writeUInt32LE(declaredSizes[name] ?? data.length, 22);
     local.writeUInt16LE(nameBuf.length, 26);
     locals.push(local, nameBuf, packed);
     const cd = Buffer.alloc(46);
@@ -29,7 +32,7 @@ export function buildZip(files, { deflate = true } = {}) {
     cd.writeUInt16LE(deflate ? 8 : 0, 10);
     cd.writeUInt32LE(crc, 16);
     cd.writeUInt32LE(packed.length, 20);
-    cd.writeUInt32LE(data.length, 24);
+    cd.writeUInt32LE(declaredSizes[name] ?? data.length, 24);
     cd.writeUInt16LE(nameBuf.length, 28);
     cd.writeUInt32LE(offset, 42);
     central.push(cd, nameBuf);

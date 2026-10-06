@@ -1,8 +1,11 @@
 /**
  * Validation of uploaded documents (content documents and brand guidelines). The file is trusted
  * only after its extension, declared MIME type and actual bytes agree. DOCX files are ZIP
- * archives: their central directory is inspected before any parser runs (zip-bomb guard).
+ * archives: their central directory is inspected before any parser runs (zip-bomb guard), and
+ * verifyDocumentContent() decompresses every entry (without keeping the data) to prove the
+ * declared sizes are true before a parser sees the archive.
  */
+import { createInflateRaw } from "node:zlib";
 
 export type DocumentKind = "pdf" | "docx" | "txt" | "md";
 
@@ -73,6 +76,9 @@ export interface ZipEntry {
   compressedSize: number;
   uncompressedSize: number;
   encrypted: boolean;
+  /** 0 = stored, 8 = deflate (the only methods Word documents use). */
+  method: number;
+  localHeaderOffset: number;
 }
 
 /** Reads a ZIP central directory without decompressing anything. Throws on malformed archives. */
@@ -101,15 +107,24 @@ export function readZipDirectory(buf: Buffer, maxEntries = 5000): ZipEntry[] {
     if (p + 46 > buf.length || buf.readUInt32LE(p) !== 0x02014b50)
       throw new Error("malformed central directory");
     const flags = buf.readUInt16LE(p + 8);
+    const method = buf.readUInt16LE(p + 10);
     const compressedSize = buf.readUInt32LE(p + 20);
     const uncompressedSize = buf.readUInt32LE(p + 24);
     const nameLen = buf.readUInt16LE(p + 28);
     const extraLen = buf.readUInt16LE(p + 30);
     const commentLen = buf.readUInt16LE(p + 32);
+    const localHeaderOffset = buf.readUInt32LE(p + 42);
     if (compressedSize === 0xffffffff || uncompressedSize === 0xffffffff)
       throw new Error("ZIP64 entries are not supported");
     const name = buf.subarray(p + 46, p + 46 + nameLen).toString("utf8");
-    entries.push({ name, compressedSize, uncompressedSize, encrypted: (flags & 1) === 1 });
+    entries.push({
+      name,
+      compressedSize,
+      uncompressedSize,
+      encrypted: (flags & 1) === 1,
+      method,
+      localHeaderOffset,
+    });
     p += 46 + nameLen + extraLen + commentLen;
   }
   return entries;
@@ -208,4 +223,98 @@ export function validateDocumentUpload(input: {
     if (problem) return problem;
   }
   return { ok: true, kind, mimeType: DOCUMENT_MIME[kind], filename };
+}
+
+/** Bytes produced by inflating `data`, or "over" as soon as the output exceeds `limit`. */
+function inflatedSize(data: Buffer, limit: number): Promise<number | "over"> {
+  return new Promise((resolve, reject) => {
+    const inflate = createInflateRaw();
+    let total = 0;
+    let settled = false;
+    const finish = (value: number | "over" | Error) => {
+      if (settled) return;
+      settled = true;
+      if (value instanceof Error) reject(value);
+      else resolve(value);
+    };
+    inflate.on("data", (chunk: Buffer) => {
+      total += chunk.length;
+      if (total > limit) {
+        finish("over");
+        inflate.destroy();
+      }
+    });
+    inflate.on("end", () => finish(total));
+    inflate.on("error", (err) => finish(err));
+    inflate.end(data);
+  });
+}
+
+/**
+ * Proves that every entry of a ZIP archive expands to exactly its declared size, by inflating it
+ * (data is counted and discarded, never kept). Parsers such as JSZip only compare the size after
+ * decompressing everything, so an entry whose header under-declares its size would otherwise
+ * expand without limit inside the worker. Also rejects compression methods Word never uses and
+ * entries whose data lies outside the file.
+ */
+export async function verifyZipContent(buf: Buffer, entries: ZipEntry[]): Promise<string | null> {
+  for (const e of entries) {
+    const at = e.localHeaderOffset;
+    if (at + 30 > buf.length || buf.readUInt32LE(at) !== 0x04034b50)
+      return `entry "${e.name.slice(0, 80)}" has no valid local header`;
+    const start = at + 30 + buf.readUInt16LE(at + 26) + buf.readUInt16LE(at + 28);
+    const end = start + e.compressedSize;
+    if (end > buf.length) return `entry "${e.name.slice(0, 80)}" extends past the end of the file`;
+    const data = buf.subarray(start, end);
+    if (e.method === 0) {
+      if (e.compressedSize !== e.uncompressedSize)
+        return `stored entry "${e.name.slice(0, 80)}" has inconsistent sizes`;
+      continue;
+    }
+    if (e.method !== 8) return `entry "${e.name.slice(0, 80)}" uses unsupported compression`;
+    let size: number | "over";
+    try {
+      size = await inflatedSize(data, e.uncompressedSize);
+    } catch {
+      return `entry "${e.name.slice(0, 80)}" cannot be decompressed`;
+    }
+    if (size === "over") return `entry "${e.name.slice(0, 80)}" expands beyond its declared size`;
+    if (size !== e.uncompressedSize)
+      return `entry "${e.name.slice(0, 80)}" is smaller than its declared size`;
+  }
+  return null;
+}
+
+/**
+ * Content checks that need more than the static validation (async): for DOCX, every archive
+ * entry is decompressed and measured against its declared size. Call after
+ * validateDocumentUpload() succeeded and before any parser runs. Returns null when the file is
+ * acceptable.
+ */
+export async function verifyDocumentContent(input: {
+  kind: DocumentKind;
+  bytes: Buffer;
+  limits?: Pick<UploadLimits, "maxArchiveEntries">;
+}): Promise<Extract<UploadCheck, { ok: false }> | null> {
+  if (input.kind !== "docx") return null;
+  let entries: ZipEntry[];
+  try {
+    entries = readZipDirectory(input.bytes, input.limits?.maxArchiveEntries ?? 5000);
+  } catch {
+    return {
+      ok: false,
+      code: "CORRUPT",
+      message: "The DOCX file is damaged or is not a Word document.",
+    };
+  }
+  const problem = await verifyZipContent(input.bytes, entries);
+  if (!problem) return null;
+  return /expands beyond/.test(problem)
+    ? {
+        ok: false,
+        code: "ARCHIVE_LIMIT",
+        message:
+          "The DOCX file contains an entry that expands beyond its declared size and was rejected.",
+      }
+    : { ok: false, code: "CORRUPT", message: `The DOCX file is damaged (${problem}).` };
 }

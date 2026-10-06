@@ -29,4 +29,5 @@ export const POST = authedHandler<Params>(
     log.info({ projectId: id, scanId: scan.id, userId: user.id }, "scan queued");
     return json({ id: scan.id, number: scan.number, status: scan.status }, { status: 201 });
   },
+  { rateLimit: "scan" },
 );

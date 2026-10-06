@@ -1,7 +1,7 @@
 import type { ScanDefaults } from "@qa/core";
 import { and, count, desc, eq, ilike, inArray, isNull, or, sql } from "drizzle-orm";
 import type { Database } from "../client";
-import { issueTrack, project, referenceSource, scan } from "../schema";
+import { issueTrack, project, projectSecret, referenceSource, scan, scannerRun } from "../schema";
 import { notifyReferenceQueued } from "./content";
 import type { FigmaReferenceValues } from "./references";
 
@@ -219,13 +219,48 @@ export async function updateProject(
 }
 
 /** Soft delete: the project disappears from all views but scan history stays recoverable. */
+/**
+ * Soft-deletes a project. In the same transaction its queued scans are cancelled, running scans
+ * get a cancellation request (their worker stops them), and its stored site credentials and Figma
+ * token are deleted: nothing keeps running or stays decryptable for a project nobody can open.
+ */
 export async function softDeleteProject(db: Database, ownerId: string, id: string) {
-  const rows = await db
-    .update(project)
-    .set({ deletedAt: new Date() })
-    .where(and(eq(project.id, id), ownedActive(ownerId)))
-    .returning({ id: project.id });
-  return rows.length > 0;
+  const deleted = await db.transaction(async (tx) => {
+    const rows = await tx
+      .update(project)
+      .set({ deletedAt: new Date() })
+      .where(and(eq(project.id, id), ownedActive(ownerId)))
+      .returning({ id: project.id });
+    if (!rows.length) return null;
+    const queued = await tx
+      .update(scan)
+      .set({ status: "cancelled", cancelRequestedAt: sql`now()`, finishedAt: sql`now()` })
+      .where(and(eq(scan.projectId, id), eq(scan.status, "queued")))
+      .returning({ id: scan.id });
+    if (queued.length)
+      await tx
+        .update(scannerRun)
+        .set({ status: "skipped", statusReason: "Project deleted before the scan started" })
+        .where(
+          and(
+            inArray(
+              scannerRun.scanId,
+              queued.map((q) => q.id),
+            ),
+            eq(scannerRun.status, "pending"),
+          ),
+        );
+    const running = await tx
+      .update(scan)
+      .set({ cancelRequestedAt: sql`now()` })
+      .where(and(eq(scan.projectId, id), eq(scan.status, "running")))
+      .returning({ id: scan.id });
+    await tx.delete(projectSecret).where(eq(projectSecret.projectId, id));
+    return [...queued, ...running].map((r) => r.id);
+  });
+  if (!deleted) return false;
+  for (const scanId of deleted) await db.execute(sql`select pg_notify('scan_events', ${scanId})`);
+  return true;
 }
 
 /** Totals across all of a user's (non-demo) projects, for the dashboard. */

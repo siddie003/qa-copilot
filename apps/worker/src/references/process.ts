@@ -7,17 +7,24 @@ import {
   type AIProvider,
   type AssistedExtraction,
 } from "@qa/ai";
-import { countSpecValues, errorFields, type AppConfig, type Logger } from "@qa/core";
+import {
+  countSpecValues,
+  errorFields,
+  publicErrorMessage,
+  type AppConfig,
+  type Logger,
+} from "@qa/core";
 import { contentRepo, designSpecsRepo, referencesRepo, secretsRepo, type Database } from "@qa/db";
 import {
-  extractContentBlocks,
   extractGuidelineDraft,
+  extractInIsolation,
   ExtractionError,
+  type ExtractionResult,
   fetchFigmaFile,
   FigmaError,
   normalizeFigma,
 } from "@qa/reference";
-import { decryptSecret, validateDocumentUpload } from "@qa/security";
+import { decryptSecret, validateDocumentUpload, verifyDocumentContent } from "@qa/security";
 import type { Storage } from "@qa/storage";
 
 export interface ReferenceRuntime {
@@ -36,7 +43,7 @@ const EXTRACTION_TIMEOUT_MS = 60_000;
 /** Upper bound for the AI-assisted part of a guideline extraction. */
 const AI_GUIDELINE_TIMEOUT_MS = 180_000;
 
-type Blocks = Awaited<ReturnType<typeof extractContentBlocks>>["blocks"];
+type Blocks = ExtractionResult["blocks"];
 
 /**
  * AI-assisted reading of a guideline document (only with a configured provider). Failures are
@@ -87,7 +94,7 @@ async function assistGuideline(
     };
   } catch (err) {
     const error =
-      err instanceof AIProviderError ? err.message : `Unexpected error: ${(err as Error).message}`;
+      err instanceof AIProviderError ? err.message : `Unexpected error: ${publicErrorMessage(err)}`;
     log.warn({ error }, "AI-assisted guideline extraction failed; literal values are used");
     return { result: null, meta: { ...base, status: "failed", error } };
   }
@@ -110,13 +117,17 @@ async function readValidated(rt: ReferenceRuntime, storageKey: string, filename:
     limits: { maxBytes: rt.config.MAX_UPLOAD_MB * 1024 * 1024 },
   });
   if (!check.ok) throw new ExtractionError(check.message);
-  return extractContentBlocks(check.kind, bytes, { timeoutMs: EXTRACTION_TIMEOUT_MS });
+  // Prove the archive's declared sizes before a parser decompresses anything (zip bombs).
+  const content = await verifyDocumentContent({ kind: check.kind, bytes });
+  if (content) throw new ExtractionError(content.message);
+  // Parsers run in a worker thread with a heap limit and a hard time limit.
+  return extractInIsolation(check.kind, bytes, { timeoutMs: EXTRACTION_TIMEOUT_MS });
 }
 
 const failureMessage = (err: unknown) =>
   err instanceof ExtractionError || err instanceof FigmaError
     ? err.message
-    : `Unexpected error while processing: ${(err as Error).message}`;
+    : `Unexpected error while processing: ${publicErrorMessage(err)}`;
 
 /** Parses a content document into blocks. */
 export async function processDocument(rt: ReferenceRuntime, doc: ContentDocument) {

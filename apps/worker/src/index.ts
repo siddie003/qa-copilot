@@ -2,6 +2,7 @@ import type http from "node:http";
 import {
   APP_VERSION,
   ConfigError,
+  configWarnings,
   describeConfig,
   errorFields,
   getConfig,
@@ -30,6 +31,7 @@ async function main() {
     throw err;
   }
   log.info({ version: APP_VERSION, config: describeConfig(config) }, "worker starting");
+  for (const warning of configWarnings(config)) log.warn({ warning }, "configuration warning");
 
   const startedAt = new Date();
   let database: WorkerStatus["database"] = { status: "pending" };
@@ -55,7 +57,9 @@ async function main() {
       scanWorker = await startScanWorker(
         { db: getDb(), storage, config, log },
         config.DATABASE_URL,
-        config.WORKER_CONCURRENCY,
+        {
+          concurrency: config.WORKER_CONCURRENCY,
+        },
       );
       referenceWorker = await startReferenceWorker(
         { db: getDb(), storage, config, log },
@@ -108,8 +112,15 @@ async function main() {
 
   let server: http.Server | undefined;
   try {
-    server = await startHealthServer(config.WORKER_HEALTH_PORT, getStatus);
-    log.info({ port: boundPort(server) }, "worker health endpoint listening on /health");
+    server = await startHealthServer(
+      config.WORKER_HEALTH_PORT,
+      getStatus,
+      config.WORKER_HEALTH_HOST,
+    );
+    log.info(
+      { port: boundPort(server), host: config.WORKER_HEALTH_HOST },
+      "worker health endpoint listening on /health",
+    );
   } catch (err) {
     log.error(errorFields(err), "could not start worker health endpoint; continuing without it");
   }
@@ -118,16 +129,21 @@ async function main() {
   const shutdown = async (signal: string) => {
     if (shuttingDown) return;
     shuttingDown = true;
-    log.info({ signal }, "worker shutting down");
+    const graceMs = config.WORKER_SHUTDOWN_GRACE_MS;
+    log.info({ signal, graceMs }, "worker shutting down");
     clearInterval(dbTimer);
-    // Lets the current page finish; an interrupted scan is marked failed on the next start.
+    // Running scans may finish within the grace period; after it they are stopped and recorded as
+    // failed ("the worker was shut down"). Document and report jobs still running then are left to
+    // stale-job recovery, which fails them with a retry hint.
     await Promise.all([
-      scanWorker?.stop().catch((err) => log.error(errorFields(err), "error stopping scan worker")),
+      scanWorker
+        ?.stop({ graceMs })
+        .catch((err) => log.error(errorFields(err), "error stopping scan worker")),
       referenceWorker
-        ?.stop()
+        ?.stop({ graceMs })
         .catch((err) => log.error(errorFields(err), "error stopping reference worker")),
       reportWorker
-        ?.stop()
+        ?.stop({ graceMs })
         .catch((err) => log.error(errorFields(err), "error stopping report worker")),
     ]);
     await new Promise<void>((resolve) => (server ? server.close(() => resolve()) : resolve()));

@@ -129,3 +129,36 @@ describe("safeRedirectPath", () => {
     expect(safeRedirectPath(input)).toBe(expected);
   });
 });
+
+// Phase 10: addresses that embed or route to private IPv4 space through IPv6 transition
+// mechanisms, and the remaining special-purpose ranges, are never "public".
+describe("isPublicIp special-purpose ranges", () => {
+  it.each([
+    ["0.0.0.0", "unspecified"],
+    ["100.64.0.1", "CGNAT"],
+    ["169.254.169.254", "cloud metadata (link-local)"],
+    ["192.0.0.1", "IETF protocol assignments"],
+    ["198.18.0.1", "benchmarking"],
+    ["240.0.0.1", "reserved"],
+    ["255.255.255.255", "broadcast"],
+    ["224.0.0.1", "multicast"],
+    ["::", "IPv6 unspecified"],
+    ["::1", "IPv6 loopback"],
+    ["::ffff:127.0.0.1", "IPv4-mapped loopback"],
+    ["::ffff:7f00:1", "IPv4-mapped loopback (hex)"],
+    ["::127.0.0.1", "IPv4-compatible loopback"],
+    ["::ffff:0:7f00:1", "IPv4-translated (SIIT)"],
+    ["64:ff9b::a00:1", "NAT64 of 10.0.0.1"],
+    ["64:ff9b:1::a00:1", "local-use NAT64"],
+    ["2002:a00:1::", "6to4 of 10.0.0.1"],
+    ["2001:0:4136:e378:8000:63bf:80ff:fffe", "Teredo"],
+    ["fc00::1", "unique local"],
+    ["fe80::1", "IPv6 link-local"],
+    ["fec0::1", "deprecated site-local"],
+    ["ff02::1", "IPv6 multicast"],
+    ["100::1", "discard-only"],
+    ["2001:db8::1", "documentation"],
+  ])("%s (%s) is not public", (address) => {
+    expect(isPublicIp(address)).toBe(false);
+  });
+});

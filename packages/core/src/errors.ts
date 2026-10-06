@@ -71,6 +71,50 @@ export class AppError extends Error {
 
 export const notFound = (what = "Resource") => new AppError("NOT_FOUND", `${what} not found`);
 
+// drizzle-orm wraps driver errors as "Failed query: <sql>\nparams: <every bound value>". The
+// values can be session tokens, password hashes, credentials ciphertext or whole page texts, so
+// they must never reach logs, the database or the UI.
+const QUERY_PARAMS_MARKER = "\nparams: ";
+
+/** Removes bound query parameters from an error text (message or stack). */
+export function stripQueryParams(text: string): string {
+  const i = text.indexOf(QUERY_PARAMS_MARKER);
+  if (i < 0) return text;
+  // In a stack trace the message is followed by "    at ..." frames; keep those.
+  const frames = text.indexOf("\n    at ", i);
+  return `${text.slice(0, i)}\nparams: [redacted]${frames >= 0 ? text.slice(frames) : ""}`;
+}
+
+interface ErrorLike {
+  name?: unknown;
+  message?: unknown;
+  code?: unknown;
+  query?: unknown;
+  cause?: unknown;
+}
+
+const asErrorLike = (v: unknown): ErrorLike | null =>
+  v && typeof v === "object" ? (v as ErrorLike) : null;
+
+/**
+ * One-line error description that is safe to store on a record and show to its owner: database
+ * errors are reduced to the driver's code and message (no SQL, no parameters), everything is
+ * capped at `maxLength` characters.
+ */
+export function publicErrorMessage(err: unknown, maxLength = 500): string {
+  const e = asErrorLike(err);
+  let text: string;
+  if (e && typeof e.query === "string") {
+    const cause = asErrorLike(e.cause);
+    const code = typeof cause?.code === "string" ? ` ${cause.code}` : "";
+    const detail = typeof cause?.message === "string" ? `: ${cause.message}` : "";
+    text = `Database error${code}${detail}`;
+  } else if (e && typeof e.message === "string") text = stripQueryParams(e.message);
+  else text = String(err);
+  text = text.replace(/\s+/g, " ").trim();
+  return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
+}
+
 export const validationError = (message: string, details?: unknown) =>
   new AppError("VALIDATION_ERROR", message, { details });
 

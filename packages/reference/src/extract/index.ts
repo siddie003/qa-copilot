@@ -7,6 +7,7 @@ import { extractPlainText } from "./text";
 
 export * from "./blocks";
 export { extractDocx, extractMarkdown, extractPdf, extractPlainText };
+export { extractInIsolation, type IsolationOptions } from "./isolated";
 
 /**
  * Extracts content blocks from a validated document. Runs with a time limit; documents that

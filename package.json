@@ -17,6 +17,7 @@
     "db:check": "npm run check-connection -w @qa/db",
     "db:generate": "npm run generate -w @qa/db",
     "db:migrate": "npm run migrate -w @qa/db",
+    "storage:gc": "tsx apps/worker/src/scripts/storage-gc.ts",
     "dev": "concurrently -n web,worker -c blue,magenta \"npm:dev:web\" \"npm:dev:worker\"",
     "dev:web": "npm run dev -w @qa/web",
     "dev:worker": "npm run dev -w @qa/worker",
@@ -32,6 +33,7 @@
     "test:unit": "vitest run --project unit",
     "test:integration": "vitest run --project integration",
     "smoke:phase2": "node tests/smoke/phase2.mjs",
+    "smoke": "node tests/smoke/smoke.mjs",
     "test:e2e": "playwright test",
     "check:tsx-capture": "tsx tests/setup/tsx-evaluate-check.ts",
     "demo:site": "node fixtures/demo-site/server.mjs"

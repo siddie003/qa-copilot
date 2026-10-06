@@ -46,6 +46,8 @@ export default defineConfig({
             APP_URL: "http://localhost:3000",
             // Fixed test-only key (never used outside the _test database).
             ENCRYPTION_KEY: "0".repeat(63) + "1",
+            // Tests make many requests per user quickly; the rate-limit test turns it back on.
+            RATE_LIMIT_ENABLED: "false",
           },
         },
       },

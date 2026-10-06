@@ -37,4 +37,5 @@ export const POST = authedHandler<Params>(
     log.info({ scanId: id, reportId: report.id, format, userId: user.id }, "report requested");
     return json(serializeReport(report), { status: 202 });
   },
+  { rateLimit: "report" },
 );

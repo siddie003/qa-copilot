@@ -9,18 +9,19 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@qa/core": "0.1.0",
-    "@qa/db": "0.1.0",
+    "@qa/ai": "0.1.0",
     "@qa/browser": "0.1.0",
+    "@qa/core": "0.1.0",
     "@qa/crawler": "0.1.0",
+    "@qa/db": "0.1.0",
+    "@qa/reference": "0.1.0",
+    "@qa/reports": "0.1.0",
+    "@qa/scanners": "0.1.0",
     "@qa/security": "0.1.0",
     "@qa/storage": "0.1.0",
     "pg": "^8.23.1",
-    "@qa/scanners": "0.1.0",
     "playwright": "^1.63.0",
-    "@qa/reference": "0.1.0",
-    "@qa/ai": "0.1.0",
-    "@qa/reports": "0.1.0"
+    "tsx": "^4.23.15"
   },
   "devDependencies": {
     "@types/pg": "^8.23.1"

@@ -22,6 +22,19 @@ Status: **Draft for approval** · Date: 2026-10-03 · Phase: 0 (no functional co
 ---
 
 > **Amendments during implementation**
+> - Phase 10: **Hardening without architectural change.** CSP is per request in `proxy.ts`
+>   (nonce + `strict-dynamic`; all pages rendered dynamically), HSTS on HTTPS. Rate limits are
+>   in-memory per user in the web process (§10's "rate limiting on auth, scan start, uploads"),
+>   plus a per-account failed-sign-in limit; Better Auth's per-IP limits get trusted-proxy
+>   configuration. One active scan per project is a database constraint (migration `0006`).
+>   Worker steps have their own abort signals; heartbeats/final status are bound to the owning
+>   worker; stale-job recovery runs periodically; SIGTERM has a grace period, then scans are
+>   recorded as interrupted. Uploaded documents are parsed in a `worker_threads` thread with heap
+>   and time limits after every DOCX entry's real size was verified. Storage GC is a manual,
+>   dry-run-by-default command. Deployment (§3 `docker/`) became a root `Dockerfile` (web/worker
+>   targets) + `docker-compose.yml` + `docs/DEPLOYMENT.md`; the Docker files are unverified because
+>   Docker was not available (risk listed in §16). No new services, no Redis, no API changes
+>   except 429 responses and the stricter credential validation.
 > - Phase 9: **Comparison is computed on demand, not a pipeline step.** `compareScans` is a pure
 >   function in `@qa/core/comparison`; `comparisonsRepo` loads both scans' records (steps with
 >   inconclusive checks, pages, captures, findings, issues with finding links) and the track

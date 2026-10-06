@@ -28,9 +28,30 @@ export interface NewScanStep {
   statusReason?: string;
 }
 
+/** Thrown by createScan when the project already has a queued or running scan. */
+export class ActiveScanExistsError extends Error {
+  constructor() {
+    super("A scan of this project is already queued or running");
+    this.name = "ActiveScanExistsError";
+  }
+}
+
+const ACTIVE_SCAN_INDEX = "scan_one_active_per_project_uq";
+
+/** True for the unique violation of the one-active-scan-per-project index (drizzle wraps it). */
+function isActiveScanConflict(err: unknown): boolean {
+  for (let e = err as { code?: unknown; constraint?: unknown; cause?: unknown } | undefined; e;) {
+    if (e.code === "23505" && e.constraint === ACTIVE_SCAN_INDEX) return true;
+    e = e.cause as typeof e;
+  }
+  return false;
+}
+
 /**
  * Creates a queued scan with its pipeline steps in one transaction. The per-project scan number
- * comes from an atomic counter update. Returns null if the project is not owned by the user.
+ * comes from an atomic counter update. Returns null if the project is not owned by the user;
+ * throws ActiveScanExistsError if another scan of the project is queued or running (enforced by
+ * a unique index, so concurrent requests cannot both succeed).
  */
 export async function createScan(
   db: Database,
@@ -45,37 +66,43 @@ export async function createScan(
     contentSnapshotHash?: string | null;
   },
 ) {
-  const created = await db.transaction(async (tx) => {
-    const [counter] = await tx
-      .update(project)
-      .set({ scanCounter: sql`${project.scanCounter} + 1` })
-      .where(and(eq(project.id, projectId), ownedProjects(ownerId)))
-      .returning({ number: project.scanCounter, isDemo: project.isDemo });
-    if (!counter) return null;
-    const [row] = await tx
-      .insert(scan)
-      .values({
-        projectId,
-        number: counter.number,
-        status: "queued",
-        configSnapshot: values.configSnapshot,
-        isDemo: counter.isDemo,
-        triggeredByUserId: values.triggeredByUserId,
-        designSpecId: values.designSpecId ?? null,
-        contentSnapshotHash: values.contentSnapshotHash ?? null,
-      })
-      .returning();
-    await tx.insert(scannerRun).values(
-      values.steps.map((s, i) => ({
-        scanId: row!.id,
-        stepKey: s.stepKey,
-        position: i + 1,
-        status: s.status ?? ("pending" as const),
-        statusReason: s.statusReason ?? null,
-      })),
-    );
-    return row!;
-  });
+  let created;
+  try {
+    created = await db.transaction(async (tx) => {
+      const [counter] = await tx
+        .update(project)
+        .set({ scanCounter: sql`${project.scanCounter} + 1` })
+        .where(and(eq(project.id, projectId), ownedProjects(ownerId)))
+        .returning({ number: project.scanCounter, isDemo: project.isDemo });
+      if (!counter) return null;
+      const [row] = await tx
+        .insert(scan)
+        .values({
+          projectId,
+          number: counter.number,
+          status: "queued",
+          configSnapshot: values.configSnapshot,
+          isDemo: counter.isDemo,
+          triggeredByUserId: values.triggeredByUserId,
+          designSpecId: values.designSpecId ?? null,
+          contentSnapshotHash: values.contentSnapshotHash ?? null,
+        })
+        .returning();
+      await tx.insert(scannerRun).values(
+        values.steps.map((s, i) => ({
+          scanId: row!.id,
+          stepKey: s.stepKey,
+          position: i + 1,
+          status: s.status ?? ("pending" as const),
+          statusReason: s.statusReason ?? null,
+        })),
+      );
+      return row!;
+    });
+  } catch (err) {
+    if (isActiveScanConflict(err)) throw new ActiveScanExistsError();
+    throw err;
+  }
   if (created) await db.execute(sql`select pg_notify('scan_queued', ${created.id})`);
   return created;
 }
@@ -108,14 +135,24 @@ export async function claimNextScan(db: Database, workerId: string) {
   return row ?? null;
 }
 
-/** Heartbeat; returns whether cancellation was requested. */
-export async function heartbeat(db: Database, scanId: string) {
+/**
+ * Heartbeat; returns whether cancellation was requested. `lost` means the scan is no longer
+ * running under this worker (e.g. it was recovered as stale by another worker after a database
+ * outage): the caller must stop and must not write its results.
+ */
+export async function heartbeat(db: Database, scanId: string, workerId?: string | null) {
   const [row] = await db
     .update(scan)
     .set({ heartbeatAt: sql`now()` })
-    .where(eq(scan.id, scanId))
+    .where(
+      and(
+        eq(scan.id, scanId),
+        eq(scan.status, "running"),
+        workerId ? eq(scan.workerId, workerId) : undefined,
+      ),
+    )
     .returning({ cancelRequestedAt: scan.cancelRequestedAt });
-  return { cancelRequested: Boolean(row?.cancelRequestedAt) };
+  return { cancelRequested: Boolean(row?.cancelRequestedAt), lost: !row };
 }
 
 /** Cancels queued scans immediately; running scans are cancelled by their worker. Owner-checked. */
@@ -195,6 +232,19 @@ export async function pendingStepKeys(db: Database, scanId: string) {
   return new Set(rows.map((r) => r.stepKey));
 }
 
+/** Marks steps that are still `running` as failed (the scan stopped while they ran). */
+export async function failRunningSteps(db: Database, scanId: string, error: string) {
+  await db
+    .update(scannerRun)
+    .set({
+      status: "failed",
+      error,
+      finishedAt: sql`now()`,
+      durationMs: sql`(extract(epoch from (now() - coalesce(${scannerRun.startedAt}, now()))) * 1000)::int`,
+    })
+    .where(and(eq(scannerRun.scanId, scanId), eq(scannerRun.status, "running")));
+}
+
 /** Marks every still-pending step as skipped with a reason (e.g. after a fatal failure). */
 export async function skipPendingSteps(db: Database, scanId: string, reason: string) {
   await db
@@ -204,17 +254,31 @@ export async function skipPendingSteps(db: Database, scanId: string, reason: str
   await notifyScan(db, scanId);
 }
 
+/**
+ * Records the final status of a running scan. Only a scan that is still `running` changes (and,
+ * with `workerId`, only while this worker owns it), so a scan that was recovered or finished
+ * elsewhere is never overwritten. Returns whether the scan was updated.
+ */
 export async function finishScan(
   db: Database,
   scanId: string,
   status: "completed" | "completed_with_failures" | "failed" | "cancelled",
   error?: string | null,
+  workerId?: string | null,
 ) {
-  await db
+  const rows = await db
     .update(scan)
     .set({ status, finishedAt: sql`now()`, error: error ?? null })
-    .where(eq(scan.id, scanId));
+    .where(
+      and(
+        eq(scan.id, scanId),
+        eq(scan.status, "running"),
+        workerId ? eq(scan.workerId, workerId) : undefined,
+      ),
+    )
+    .returning({ id: scan.id });
   await notifyScan(db, scanId);
+  return rows.length > 0;
 }
 
 export async function setTechnology(
@@ -226,37 +290,51 @@ export async function setTechnology(
 }
 
 /**
- * Scans whose worker stopped sending heartbeats (crash, restart) are marked failed so they never
- * stay "running" forever. Returns the ids that were recovered.
+ * Scans whose worker stopped sending heartbeats (crash, restart, a worker that never came back)
+ * are marked failed so they never stay "running" forever and never block the project's next
+ * scan. Safe to run periodically and from several workers at once: each scan is re-checked and
+ * updated in its own transaction, so a scan is recovered once and a live scan is never touched.
+ * Returns the ids that were recovered.
  */
 export async function failStaleScans(db: Database, staleAfterMs: number) {
-  const stale = await db
+  const staleBefore = sql`now() - (${staleAfterMs} || ' milliseconds')::interval`;
+  const candidates = await db
     .select({ id: scan.id })
     .from(scan)
-    .where(
-      and(
-        eq(scan.status, "running"),
-        lt(scan.heartbeatAt, sql`now() - (${staleAfterMs} || ' milliseconds')::interval`),
-      ),
-    );
-  for (const { id } of stale) {
-    await db
-      .update(scannerRun)
-      .set({
-        status: "failed",
-        error: "Worker stopped while this step was running",
-        finishedAt: sql`now()`,
-      })
-      .where(and(eq(scannerRun.scanId, id), eq(scannerRun.status, "running")));
-    await skipPendingSteps(db, id, "Scan was interrupted (worker stopped)");
-    await finishScan(
-      db,
-      id,
-      "failed",
-      "The worker stopped responding during this scan. Start a new scan.",
-    );
+    .where(and(eq(scan.status, "running"), lt(scan.heartbeatAt, staleBefore)));
+  const recovered: string[] = [];
+  for (const { id } of candidates) {
+    const done = await db.transaction(async (tx) => {
+      const [row] = await tx
+        .update(scan)
+        .set({
+          status: "failed",
+          finishedAt: sql`now()`,
+          error: "The worker stopped responding during this scan. Start a new scan.",
+        })
+        .where(and(eq(scan.id, id), eq(scan.status, "running"), lt(scan.heartbeatAt, staleBefore)))
+        .returning({ id: scan.id });
+      if (!row) return false;
+      await tx
+        .update(scannerRun)
+        .set({
+          status: "failed",
+          error: "Worker stopped while this step was running",
+          finishedAt: sql`now()`,
+        })
+        .where(and(eq(scannerRun.scanId, id), eq(scannerRun.status, "running")));
+      await tx
+        .update(scannerRun)
+        .set({ status: "skipped", statusReason: "Scan was interrupted (worker stopped)" })
+        .where(and(eq(scannerRun.scanId, id), eq(scannerRun.status, "pending")));
+      return true;
+    });
+    if (done) {
+      recovered.push(id);
+      await notifyScan(db, id);
+    }
   }
-  return stale.map((s) => s.id);
+  return recovered;
 }
 
 export interface NewPage {

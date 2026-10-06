@@ -18,7 +18,11 @@ export async function renderPdf(
   html: string,
   opts: PdfOptions = {},
 ): Promise<Buffer> {
-  const context = await browser.newContext({ javaScriptEnabled: false, offline: true });
+  const context = await browser.newContext({
+    javaScriptEnabled: false,
+    offline: true,
+    acceptDownloads: false,
+  });
   try {
     await context.route("**/*", (route) => route.abort("blockedbyclient"));
     const page = await context.newPage();

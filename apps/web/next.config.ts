@@ -4,8 +4,9 @@ import type { NextConfig } from "next";
 // `npm run -w @qa/web` executes with cwd = apps/web, so the monorepo root is two levels up.
 const repoRoot = path.resolve(process.cwd(), "../..");
 
-// A full nonce-based script CSP is added during production hardening (Phase 10).
-// These headers are safe to apply now without breaking Next.js inline bootstrapping.
+// Headers for every response. Pages additionally get the nonce-based script CSP and, on HTTPS
+// deployments, HSTS from proxy.ts (both need per-request or runtime values). Browsers enforce
+// every CSP header they receive, so this static policy and the page policy combine.
 const securityHeaders = [
   { key: "X-Content-Type-Options", value: "nosniff" },
   { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },

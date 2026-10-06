@@ -11,9 +11,13 @@ export const GET = authedHandler("GET /api/v1/projects", async (req, { user }) =
   return json({ ...result, items: result.items.map(serializeProject) });
 });
 
-export const POST = authedHandler("POST /api/v1/projects", async (req, { user, log }) => {
-  const input = await readJson(req, projectCreateSchema);
-  const project = await createProject(user.id, input);
-  log.info({ projectId: project.id, userId: user.id }, "project created");
-  return json(serializeProject(project), { status: 201 });
-});
+export const POST = authedHandler(
+  "POST /api/v1/projects",
+  async (req, { user, log }) => {
+    const input = await readJson(req, projectCreateSchema);
+    const project = await createProject(user.id, input);
+    log.info({ projectId: project.id, userId: user.id }, "project created");
+    return json(serializeProject(project), { status: 201 });
+  },
+  { rateLimit: "project" },
+);

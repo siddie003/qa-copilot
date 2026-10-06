@@ -16,11 +16,100 @@ _Last updated: 2026-10-05_
   re-verified before Phase 8 started (typecheck clean; 357/357 tests).
 - **Phase 8: Issue management + reporting.** Verified complete at the start of Phase 9
   (typecheck clean; 394/394 tests).
+- **Phase 9: Scan history + comparison.** Declared complete by the user on 2026-10-05; re-verified
+  before Phase 10 started (typecheck, lint, format clean; 426/426 tests).
 - Every phase through 9 has a git checkpoint commit (see "Git checkpoints" below).
 
 ## Current phase
-**Phase 9: Scan history + comparison.** Implemented and verified on 2026-10-05.
-**Awaiting approval ("APPROVED — CONTINUE").** Phase 10 not started.
+**Phase 10: Production hardening.** Implemented and verified on 2026-10-05. All planned phases
+(0–10) are implemented. **Awaiting review.** No further phase is planned.
+
+## Found at the start of Phase 10
+- Phase 9 verified from the repository: typecheck/lint/format clean, 426/426 vitest; both
+  databases at 6 migrations; working tree clean at `7a6180c`. Docs matched the code.
+- Already in place: SSRF guard on every request/redirect/connection and a browser guard proxy
+  (all special IPv4/IPv6 ranges verified blocked), upload validation, random storage keys,
+  owner-scoped queries, parameterized SQL, encrypted secrets, log redaction, problem+json errors,
+  same-origin checks, Better Auth per-IP sign-in limits, health/readiness endpoints, pino logs.
+- Gaps found in the code (all fixed, see below): no script CSP (deferred from Phase 1), no API rate
+  limits, spoofable client IP for sign-in limits, DOCX bombs with understated sizes passed the
+  guard, document parsing could not be stopped, CR/LF accepted in credential headers, drizzle
+  errors (with every query parameter) logged and shown, no database guard against two active
+  scans per project, stale-job recovery only at worker start, a recovered scan could be
+  overwritten, timed-out steps kept running (and stored data after the scan moved on), SIGTERM
+  waited for whole scans, deleted projects kept running scans and credentials, Chromium accepted
+  downloads, worker health only on loopback, `tsx` missing from production installs, no storage
+  cleanup, no Docker/deployment docs.
+- Blockers: none. Not available: Docker, live AI/Figma keys, the master requirements document
+  (its §60 acceptance list) — Phase 10 followed the Phase 0 plan's Phase 10 row and the hardening
+  checklist given with the phase.
+
+## Phase 10 features implemented
+- **Security:** nonce-based CSP + HSTS (`proxy.ts`); per-user rate limits (429 + Retry-After);
+  per-account failed-sign-in lockout (10 / 15 min); `TRUSTED_PROXIES` / `CLIENT_IP_HEADER`;
+  DOCX entries decompressed and measured before parsing (upload and worker); documents parsed in a
+  worker thread (512 MB heap, hard time limit); control characters refused in site credentials;
+  project deletion cancels scans and deletes credentials; database errors sanitized in logs and on
+  records; Better Auth logs through pino; Chromium downloads refused; readiness coalesced.
+- **Reliability:** unique index `scan_one_active_per_project_uq` (migration 0006, with duplicate
+  cleanup); periodic, race-safe stale recovery (scans, documents, Figma, reports); heartbeat and
+  final status bound to the owning worker; per-step abort signals (timed-out steps stop, no late
+  findings); graceful shutdown with `WORKER_SHUTDOWN_GRACE_MS` (scans recorded as interrupted);
+  final scan state recorded after database errors; storage garbage collector
+  (`npm run storage:gc`, dry run by default).
+- **Production:** `Dockerfile` (web/worker targets), `docker-compose.yml`, `.dockerignore`,
+  `deploy.env.example` (unverified: no Docker); `docs/DEPLOYMENT.md`; `tsx` as a runtime
+  dependency; `WORKER_HEALTH_HOST`; configuration warnings (logs + Settings page).
+- **UI:** sign-in shows the lockout wait time; Settings lists production configuration checks;
+  the deletion dialog explains the new effects; scan step links meet the WCAG 2.2 target size
+  (found by the new acceptance test).
+
+## Phase 10 tests (2026-10-05)
+- Typecheck (root + all 12 workspaces), ESLint, Prettier: clean.
+- `vitest`: **506 passed** (53 files: 33 unit / 391 tests, 20 integration / 115 tests; was 426 in
+  45 files), 264 s. One earlier full run was abnormally slow (61 min) and vitest could not start the
+  worker for one file ("Timeout waiting for worker to respond"; the other 505 tests passed); the
+  rerun with per-test timings was normal and complete. New:
+  - security (real database): IDOR matrix — 44 route calls on another user's resources all 404
+    problem+json, plus list/filter/comparison variants, nothing changed afterwards; concurrent
+    Start QA Scan → one 201, the others 409; rate limit → 429 + Retry-After after 30 project
+    creations, other users unaffected; account lockout through the real `/api/auth` route with a
+    forged IP per attempt (even the right password refused while locked); forged-size DOCX upload
+    rejected with nothing stored; CR/LF credential header refused
+  - worker reliability (real database, real Chromium, slow local site): a timed-out crawl stops
+    (mutation check: without the step abort the crawl stored 11 more pages after the scan
+    ended); a worker shutdown records the scan as interrupted; a scan recovered elsewhere is not
+    overwritten; the worker loop's `stop({ graceMs })` (no new scans claimed); stale recovery once
+    under concurrency; owner-bound heartbeat/finish; project deletion effects; migration 0006
+    duplicate cleanup
+  - uploads: forged-size bombs, unknown compression, out-of-range entries, 600 fuzzed/truncated/
+    random files never throw, hostile file names; isolated parsing (same blocks as in-process,
+    runaway parser stopped by the hard limit, memory-hungry parser stopped at its heap limit)
+  - CSP builder, proxy (redirect, nonce per request, HSTS), rate limiter and lockout, config
+    (new variables, warnings), error sanitization (`stripQueryParams`, `publicErrorMessage`,
+    `errorFields`), credential control characters, SSRF special ranges (24 cases), Chromium
+    download refusal (real browser), storage GC (plan rules; real folder + database)
+  - adjusted: two Phase 7/8 integration tests created several unfinished scans in one project
+    (impossible through the API and now refused by the database) — they finish the previous scan
+    first; the reports test sets the finished status directly (`finishScan` only finishes running
+    scans)
+- `next build`: pass (every route dynamic). Playwright e2e: **10/10** (new
+  `tests/e2e/acceptance.spec.ts`: sign-up form → project → approved content parsed by the
+  isolated parser → scan from the UI → issue status with note → Markdown report downloaded →
+  rescan of v2 (concurrent start refused) → comparison → Settings production checks → project
+  deletion (credentials gone); security headers and the nonce on every script; no CSP violation on
+  any page; axe at each step). Its first run found the target-size failure (fixed).
+- Production runtime checks:
+  - pruned install (`npm ci` → `npm run build` → `npm prune --omit=dev`, the Dockerfile sequence)
+    started natively: web health 200, readiness 200 (7/7 migrations, path hidden), all 14 scripts
+    of `/login` carry the CSP nonce, worker health 200 with all three loops, migrations via
+    `node --import tsx`, 3 configuration warnings logged per process, no error lines
+  - real browser on the production build: nonce on every script, client navigation, no console
+    errors, an injected inline event handler blocked by the CSP
+  - `npm run storage:gc` dry run on the real storage folder: 3 orphaned (empty) project folders
+    from integration tests found, 12 newer ones kept by the age guard, referenced data untouched;
+    nothing was deleted
+  - migration 0006 applied to the development database (no duplicates existed)
 
 ## Found at the start of Phase 9
 - Phase 8 verified from the repository: typecheck clean, 394/394 tests; Phase 0–8 docs match the
@@ -124,7 +213,8 @@ _Last updated: 2026-10-05_
 Created at the start of Phase 9 (2026-10-05) on `main` without touching the working tree:
 `5b2579b` Phase 6 (tree of `dfba1be`) and `8434ee8` Phases 7 + 8 (no intermediate snapshot
 existed, so they share a commit). Phase 9 has its own commit ("Phase 9: scan history and
-comparison").
+comparison"). Phase 10 is **not committed yet** (working tree on top of `7a6180c`); commit it
+after review.
 
 ## Phase 8 features implemented
 - **Issue explorer** (`/issues`, project Issues tab, `GET /api/v1/issues`,
@@ -368,7 +458,8 @@ comparison").
 - The pre-existing scroll-region tables (projects, scans) have the same latent `sr-only` overflow
   pattern fixed in the newer tables (the issues and reports tables were rebuilt in Phase 8 with
   the fix); they pass the current audits, so they were left unchanged.
-- Observed in e2e logs: Next.js `MaxListenersExceededWarning` on the gzip stream (not investigated),
+- Observed in e2e logs: Next.js `MaxListenersExceededWarning` on the gzip stream (Next.js's built-in
+  response compression; harmless, not investigated further — compression can be left to the reverse proxy),
   and once per full run, in a varying spec, "The destination stream closed early" (a streamed
   response aborted when the test navigates away; timing-dependent, no test fails, app unaffected).
 - AI (Phase 7): not tested against the live Anthropic or OpenAI APIs (no key in this
@@ -390,9 +481,10 @@ comparison").
 - Explorer filters on verdict, confidence and URL use the latest occurrence of each issue.
 - A user who sets an issue back to *Open* hands it back to the system: a later scan may set it to
   *Inconclusive* if the evidence becomes inconclusive (recorded as a system event).
-- Stored files (screenshots, reports) are not removed when rows disappear through database
-  cascades (e.g. a deleted user); deleting a report through the app removes its file. Storage
-  garbage collection is a Phase 10 hardening item.
+- Stored files (screenshots, reports) are not removed automatically when rows disappear through
+  database cascades (e.g. a deleted user); `npm run storage:gc` (Phase 10) finds and removes them
+  on demand (dry run by default). Soft-deleted projects keep their files unless
+  `--include-deleted-projects` is given.
 - Scan comparison (Phase 9): an issue is one scanner rule across pages, so per-page differences
   show as "changed" with finding-level detail (new / no longer found / not rechecked per page).
   "Re-checked" relies on the scanners' stored inconclusive-check labels for page-level gaps (kept
@@ -402,11 +494,33 @@ comparison").
   fixes (one click on the comparison of the latest scan). Reports cover one scan and do not include
   a comparison. The history page computes missing comparison summaries on first view (cached
   afterwards); the dashboard only shows cached ones.
-- Dev-tool `npm audit` findings, ESLint 9 pin, missing Docker unchanged.
+- Dev-tool `npm audit` findings unchanged: `npm audit --omit=dev` reports 4 moderate advisories,
+  all in the esbuild copy bundled by `drizzle-kit` (a development tool used only to generate
+  migrations; the advisory concerns esbuild's dev server). ESLint 9 pin unchanged.
+- Phase 10 (production hardening):
+  - Docker image and Compose stack were written but not built or run (Docker not installed). The
+    same build sequence (`npm ci` → `npm run build` → `npm prune --omit=dev` → start) was verified
+    natively. OS signal handling (SIGTERM) could not be exercised on Windows; the shutdown logic is
+    covered by integration tests.
+  - Rate limits, the per-account sign-in lockout and Better Auth's per-IP limits are kept in the
+    web process's memory: run one web instance (several instances would each enforce their own).
+  - Anyone who knows an account's email address can trigger its sign-in lockout (10 wrong
+    passwords; it lasts at most 15 minutes) — the usual trade-off of per-account limits.
+  - Without a reverse proxy that overwrites `X-Forwarded-For`, clients choose the IP that the
+    per-IP sign-in limits see (Next.js only sets the header when it is absent); the per-account
+    limit does not depend on it. See docs/DEPLOYMENT.md.
+  - The CSP allows inline `style` attributes (`style-src 'unsafe-inline'`; React style props);
+    scripts are nonce-only. `'strict-dynamic'` trusts scripts created by running scripts.
+  - Chromium runs without its own sandbox (Playwright's default); the deployment guide asks for an
+    isolated worker with restricted egress. Not changed, to avoid breaking container setups.
+  - The per-project page limit (`maxPages` up to 500) is not capped by the server's
+    `SCAN_MAX_PAGES` (that variable is only the default), as before.
+  - Integration tests and the development database share the repository's `storage/` folder
+    (existing test setup), so the storage collector reports integration-test leftovers as
+    orphans locally.
 
 ## Next phase
-Phase 10: hardening (rate limits, upload fuzzing, IDOR tests, CSP, storage garbage collection),
-Docker, README/DEPLOYMENT and the full acceptance workflow (starts only after approval).
+None planned: Phase 10 was the last phase of the Phase 0 roadmap. Waiting for review.
 
 ## Required environment variables
 `DATABASE_URL`, `BETTER_AUTH_SECRET` (required); `ENCRYPTION_KEY` (required to store site
@@ -414,4 +528,6 @@ credentials and project Figma tokens; required in production); `TEST_DATABASE_UR
 tests; optional `FIGMA_ACCESS_TOKEN`, `MAX_UPLOAD_MB`; `SCAN_ALLOWED_PRIVATE_HOSTS`, `SCAN_*`,
 `LINK_CHECK_RETRIES`, `WORKER_CONCURRENCY`; AI (optional): `AI_PROVIDER`, `AI_MODEL`,
 `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` (+ `OPENAI_BASE_URL`), `AI_EFFORT`, `AI_REFUSAL_FALLBACK`,
-`AI_CONCURRENCY`, `AI_TIMEOUT_MS`, `AI_MAX_OUTPUT_TOKENS`, `AI_TEMPERATURE`. See `.env.example`.
+`AI_CONCURRENCY`, `AI_TIMEOUT_MS`, `AI_MAX_OUTPUT_TOKENS`, `AI_TEMPERATURE`. Phase 10 (optional):
+`TRUSTED_PROXIES`, `CLIENT_IP_HEADER`, `RATE_LIMIT_ENABLED`, `WORKER_HEALTH_HOST`,
+`WORKER_SHUTDOWN_GRACE_MS`. Production settings: docs/DEPLOYMENT.md. See `.env.example`.

@@ -4,9 +4,9 @@ AI-powered website QA, design and brand compliance platform. You provide a desig
 (Figma or brand guidelines), approved content and a website URL; QA Copilot crawls the site,
 runs evidence-based QA scanners, and turns the findings into developer-ready issues and reports.
 
-> **Status:** Phase 9 (scan history + comparison). Hardening, Docker and deployment follow in Phase 10. See [PROJECT_STATUS.md](PROJECT_STATUS.md) and
-> [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). A full README (Docker, deployment, scanners, AI
-> configuration) is completed in Phase 10.
+> **Status:** Phase 10 (production hardening) complete — all planned phases are implemented. See
+> [PROJECT_STATUS.md](PROJECT_STATUS.md), [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and, for
+> production, [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 ## Requirements
 
@@ -46,9 +46,15 @@ Production mode:
 
 ```bash
 npm run build
+npm run db:migrate
 npm run start:web
 npm run start:worker
 ```
+
+For a real deployment (HTTPS reverse proxy, production settings, Docker Compose, backups,
+upgrades, security checklist) follow [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). The `Dockerfile`
+and `docker-compose.yml` are provided but were not verified (Docker was not available while they
+were written).
 
 ## Running a scan
 
@@ -231,6 +237,35 @@ Scanning private or internal addresses is blocked unless the `host:port` is list
 `SCAN_ALLOWED_PRIVATE_HOSTS`. Checks run before every request, at every redirect hop, at
 connection time (DNS rebinding) and for every request made by the browser.
 
+## Security
+
+- **Accounts:** email + password (Better Auth, hashed passwords, database sessions, httpOnly
+  SameSite cookies, Secure on HTTPS). Sign-in is limited per IP (Better Auth) and, independent of
+  the IP, per account: 10 failed attempts in 15 minutes lock the account's sign-in for the rest
+  of that window. Set `AUTH_ALLOW_SIGNUP=false` to close sign-up.
+- **Authorization:** every query is scoped to the signed-in owner; another user's projects,
+  scans, issues, reports, documents, references and files answer 404 (tested route by route).
+  State-changing requests must come from the app's own origin.
+- **Rate limits (per user):** 600 API requests/min; 20 scan starts/hour; 30 uploads, 30 report
+  requests and 30 design-reference requests per 10 min; 30 new projects/hour (429 with
+  `Retry-After`; `RATE_LIMIT_ENABLED`). One queued or running scan per project (database
+  constraint).
+- **Browser protections:** nonce-based Content-Security-Policy on every page (no inline or
+  third-party scripts), HSTS on HTTPS, `X-Frame-Options: DENY`, `nosniff`, strict referrer and
+  permissions policies; scanned website content is always rendered as text.
+- **Scanning safety (SSRF):** only http/https; private, loopback, link-local, CGNAT, metadata and
+  other reserved addresses are refused when a URL is saved, before every request and redirect, at
+  connection time and for every request Chromium makes (guard proxy); `SCAN_ALLOWED_PRIVATE_HOSTS`
+  is the explicit exception list. Chromium never saves downloads.
+- **Uploads:** extension, declared type and file content must agree; DOCX archives are checked
+  for zip bombs, including archives that understate their content (every entry is decompressed
+  and measured before parsing); documents are parsed in a separate worker thread with a memory
+  and time limit; files are stored under random names and served only through owner-checked
+  endpoints.
+- **Secrets:** site credentials and Figma tokens are encrypted (AES-256-GCM, `ENCRYPTION_KEY`),
+  write-only in the API and deleted with their project; logs redact secrets and never contain
+  bound database query parameters; error responses never contain internals.
+
 ## Health checks
 
 | Endpoint | Purpose |
@@ -239,7 +274,16 @@ connection time (DNS rebinding) and for every request made by the browser.
 | `GET http://localhost:3000/api/v1/health/ready` | Config valid, PostgreSQL reachable, storage writable; 503 otherwise |
 | `GET http://127.0.0.1:3001/health` | Worker status: database, scan worker state, current scan; 503 when degraded |
 
-The **Settings** page shows the same live checks in the UI.
+The **Settings** page shows the same live checks in the UI and, in production, warnings about
+risky settings (also logged when each process starts).
+
+## Maintenance
+
+```bash
+npm run db:migrate                 # after every pull/upgrade (the worker pauses until it ran)
+npm run storage:gc                 # dry run: stored files that no record references any more
+npm run storage:gc -- --apply      # remove them (only files older than 24 h)
+```
 
 ## API
 
@@ -304,8 +348,10 @@ name does not end in `_test`.
 
 End-to-end tests (Playwright): accessibility audits (axe-core, WCAG 2.2 A/AA, desktop and 390px
 mobile), a full scan from the UI against the fixture site, references and comparison, the
-issue workflow with report generation and downloads, and scan history with a comparison of two
-real scans of the fixture's v1 and v2. They start a production web server
+issue workflow with report generation and downloads, scan history with a comparison of two
+real scans of the fixture's v1 and v2, and the Phase 10 acceptance workflow (sign-up → project →
+approved content → scan → issue status → report download → rescan → comparison → project
+deletion, with the Content-Security-Policy checked on every page). They start a production web server
 on port 3100, a worker (health port 3191) and the fixture site on 4100 (run `npm run build`
 first; your dev servers are not touched) and remove their throwaway accounts and screenshots:
 
@@ -315,7 +361,17 @@ npm run build
 npm run test:e2e
 ```
 
-HTTP smoke test against a running server (creates and later deletes throwaway accounts):
+Full smoke test of a running installation (web on :3000, worker on :3001, fixture site on
+:4100; about 1–2 minutes). It checks health and readiness, sign-up and protected routes, then
+scans the fixture's v1 and v2 with all six scanners and checks findings, evidence, issues, a JSON
+report, the scan history and the comparison. It ends with `SMOKE TEST PASSED` (exit code 0) and
+deletes its throwaway account (`-- --keep` keeps it):
+
+```bash
+npm run smoke
+```
+
+Phase 2 persistence smoke test (creates and later deletes throwaway accounts):
 
 ```bash
 npm run smoke:phase2 -- create    # then restart the server
@@ -329,7 +385,7 @@ apps/web           Next.js UI, auth, /api/v1 route handlers
 apps/worker        Scan worker (claims queued scans, runs the pipeline), reference worker
                    (parses documents, reads Figma, extracts guideline drafts) and report worker
 packages/core      Config validation, logging, error model, domain schemas
-packages/db        Drizzle schema (24 tables), migrations, repositories, health check
+packages/db        Drizzle schema (25 tables), migrations, repositories, health check
 packages/security  URL validation, DNS/connect-time SSRF guard, safe redirects
 packages/crawler   HTTP fetcher, URL normalization, robots.txt, crawl loop, technology detection
 packages/browser   Playwright capture with an in-browser network guard
@@ -344,7 +400,8 @@ fixtures/documents Design spec + approved content for the fixture; real DOCX/PDF
 fixtures/figma     Figma REST response used by tests
 scripts/           Environment and database bootstrap scripts
 tests/             Integration test setup, HTTP smoke tests
-docs/              Architecture and design documents
+docs/              Architecture (ARCHITECTURE.md) and deployment (DEPLOYMENT.md)
+Dockerfile, docker-compose.yml, deploy.env.example   Container build and Compose stack (unverified)
 ```
 
 ## Configuration

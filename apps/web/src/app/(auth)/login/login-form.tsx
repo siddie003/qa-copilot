@@ -27,7 +27,7 @@ export function LoginForm({ next }: { next: string | null }) {
       setPending(false);
       setError(
         error.status === 429
-          ? "Too many sign-in attempts. Wait a minute and try again."
+          ? error.message || "Too many sign-in attempts. Wait a minute and try again."
           : "Email or password is incorrect.",
       );
       return;

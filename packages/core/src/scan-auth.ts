@@ -16,6 +16,21 @@ const FORBIDDEN_HEADERS = new Set([
 
 const cookiePair = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+=[^;,\s]*$/;
 
+/** Control characters (tab excepted) would split or corrupt an HTTP request (header injection). */
+export function hasControlChars(value: string): boolean {
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i);
+    if ((code < 32 && code !== 9) || code === 127) return true;
+  }
+  return false;
+}
+
+const noControlChars = (field: string) =>
+  [
+    (v: string) => !hasControlChars(v),
+    `the ${field} must not contain line breaks or control characters`,
+  ] as const;
+
 /**
  * Credentials for scanning a login-protected site. They are only ever sent to the target site
  * (same host, www-aware), never to third-party resources.
@@ -23,8 +38,17 @@ const cookiePair = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+=[^;,\s]*$/;
 export const scanAuthSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("basic"),
-    username: z.string().min(1, "username is required").max(256),
-    password: z.string().min(1, "password is required").max(1024),
+    username: z
+      .string()
+      .min(1, "username is required")
+      .max(256)
+      .refine(...noControlChars("username"))
+      .refine((u) => !u.includes(":"), "the username must not contain a colon (HTTP Basic)"),
+    password: z
+      .string()
+      .min(1, "password is required")
+      .max(1024)
+      .refine(...noControlChars("password")),
   }),
   z.object({
     type: z.literal("header"),
@@ -33,7 +57,11 @@ export const scanAuthSchema = z.discriminatedUnion("type", [
       .trim()
       .regex(/^[A-Za-z0-9-]{1,64}$/, "use letters, digits and dashes")
       .refine((n) => !FORBIDDEN_HEADERS.has(n.toLowerCase()), "this header cannot be used"),
-    value: z.string().min(1, "value is required").max(4096),
+    value: z
+      .string()
+      .min(1, "value is required")
+      .max(4096)
+      .refine(...noControlChars("value")),
   }),
   z.object({
     type: z.literal("cookies"),

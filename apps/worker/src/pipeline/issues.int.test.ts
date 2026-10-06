@@ -7,7 +7,7 @@ import {
 } from "@qa/ai";
 import { createLogger, defaultScanDefaults, parseConfig, planScanSteps } from "@qa/core";
 import { closeDb, getDb, pipelineRepo, projectsRepo, scanIssuesRepo, schema } from "@qa/db";
-import { asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createTestUser, hasTestDb, resetDatabase } from "../../../../tests/setup/db";
 import { aiStep, groundingStep, type IssueStepEnv } from "./issue-steps";
@@ -105,6 +105,17 @@ describe.skipIf(!hasTestDb)(
     let projectId: string;
 
     async function newScan(findings: Record<string, NewFinding[]>) {
+      // A project has one queued/running scan at a time (database constraint since Phase 10):
+      // earlier scans of these tests count as finished.
+      await db()
+        .update(schema.scan)
+        .set({ status: "completed" })
+        .where(
+          and(
+            eq(schema.scan.projectId, projectId),
+            inArray(schema.scan.status, ["queued", "running"]),
+          ),
+        );
       const scan = (await pipelineRepo.createScan(db(), ownerId, projectId, {
         configSnapshot: {},
         steps: planScanSteps(["accessibility", "seo", "performance", "responsive"]),

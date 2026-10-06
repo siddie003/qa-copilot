@@ -8,32 +8,62 @@ export interface ScanWorker {
   readonly workerId: string;
   readonly concurrency: number;
   currentScanIds(): string[];
-  stop(): Promise<void>;
+  /**
+   * Stops claiming scans and lets running scans continue for `graceMs`; scans still running after
+   * that are stopped and recorded as failed ("the worker was shut down"), keeping what they stored.
+   */
+  stop(opts?: { graceMs?: number }): Promise<void>;
+}
+
+export interface ScanWorkerOptions {
+  concurrency?: number;
+  /** How often stale scans (no heartbeat for STALE_AFTER_MS) are recovered. Default 60 s. */
+  recoveryIntervalMs?: number;
+  staleAfterMs?: number;
 }
 
 const IDLE_POLL_MS = 5_000;
 const STALE_AFTER_MS = 120_000;
+const RECOVERY_INTERVAL_MS = 60_000;
+/** After the grace period, how long stopped scans may take to record their final state. */
+const ABORT_WIND_DOWN_MS = 30_000;
+
+const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 /**
- * Processes queued scans one at a time. Picks up new work immediately via LISTEN scan_queued,
- * with a polling fallback. On start, scans left "running" by a crashed worker are marked failed.
+ * Processes queued scans (`concurrency` at a time). Picks up new work immediately via LISTEN
+ * scan_queued, with a polling fallback. Scans left "running" by a crashed or vanished worker are
+ * marked failed on start and then periodically, so they never block their project for good.
  */
 export async function startScanWorker(
   rt: ScanRuntime,
   databaseUrl: string,
-  concurrency = 1,
+  concurrencyOrOptions: number | ScanWorkerOptions = 1,
 ): Promise<ScanWorker> {
+  const opts: ScanWorkerOptions =
+    typeof concurrencyOrOptions === "number"
+      ? { concurrency: concurrencyOrOptions }
+      : concurrencyOrOptions;
+  const concurrency = opts.concurrency ?? 1;
+  const staleAfterMs = opts.staleAfterMs ?? STALE_AFTER_MS;
   const workerId = `${os.hostname()}:${process.pid}`;
   const log = rt.log.child({ component: "scan-worker", workerId });
   const current = new Set<string>();
   let stopping = false;
+  const shutdown = new AbortController();
   const sleepers = new Set<() => void>();
   const wakeAll = () => {
     for (const w of [...sleepers]) w();
   };
 
-  const recovered = await pipelineRepo.failStaleScans(rt.db, STALE_AFTER_MS);
-  if (recovered.length) log.warn({ scanIds: recovered }, "marked interrupted scans as failed");
+  const recover = async () => {
+    const recovered = await pipelineRepo.failStaleScans(rt.db, staleAfterMs);
+    if (recovered.length) log.warn({ scanIds: recovered }, "marked interrupted scans as failed");
+  };
+  await recover();
+  const recoveryTimer = setInterval(() => {
+    recover().catch((err) => log.error(errorFields(err), "stale scan recovery failed"));
+  }, opts.recoveryIntervalMs ?? RECOVERY_INTERVAL_MS);
 
   const listener = new pg.Client({
     connectionString: databaseUrl,
@@ -57,7 +87,7 @@ export async function startScanWorker(
         if (scan) {
           current.add(scan.id);
           try {
-            await runScan(rt, scan);
+            await runScan({ ...rt, shutdown: shutdown.signal }, scan);
           } finally {
             current.delete(scan.id);
           }
@@ -66,6 +96,7 @@ export async function startScanWorker(
       } catch (err) {
         log.error(errorFields(err), "scan loop error");
       }
+      if (stopping) break;
       await new Promise<void>((resolve) => {
         const done = () => {
           clearTimeout(t);
@@ -84,11 +115,22 @@ export async function startScanWorker(
     workerId,
     concurrency,
     currentScanIds: () => [...current],
-    async stop() {
+    async stop({ graceMs = 0 } = {}) {
       stopping = true;
+      clearInterval(recoveryTimer);
       wakeAll();
       await listener.end().catch(() => {});
-      await running;
+      const finished = await Promise.race([
+        running.then(() => true),
+        delay(graceMs).then(() => false),
+      ]);
+      if (finished) return;
+      log.warn(
+        { scanIds: [...current], graceMs },
+        "grace period over: stopping running scans (recorded as interrupted)",
+      );
+      shutdown.abort();
+      await Promise.race([running, delay(ABORT_WIND_DOWN_MS)]);
     },
   };
 }

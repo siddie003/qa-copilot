@@ -4,6 +4,7 @@ import {
   authHeadersFor,
   COMPARISON_KEYS,
   errorFields,
+  publicErrorMessage,
   SCANNER_KEYS,
   specSelectors,
   scanAuthSchema,
@@ -58,7 +59,19 @@ export interface ScanRuntime {
   heartbeatMs?: number;
   /** AI provider; defaults to the one configured by AI_PROVIDER (tests inject fakes). */
   ai?: AIProvider;
+  /**
+   * Aborted when the worker shuts down and its grace period is over: the scan stops and is
+   * recorded as failed ("interrupted"), with everything stored so far kept.
+   */
+  shutdown?: AbortSignal;
+  /** How long a stopped (timed-out, cancelled) step may take to wind down. Default 10 s. */
+  stepSettleMs?: number;
 }
+
+/** Why a scan stopped before its last step: the user, a worker shutdown, or lost ownership. */
+type StopReason = "cancelled" | "shutdown" | "lost";
+
+const SHUTDOWN_ERROR = "The worker was shut down during this scan. Start a new scan.";
 
 type StepOutcome = {
   status: "completed" | "failed" | "inconclusive" | "skipped";
@@ -99,7 +112,26 @@ interface ScanState {
   issues: IssueStepState;
 }
 
-/** Executes one claimed scan end to end. Never throws: all failures are recorded on the scan. */
+/** Waits for `work` to settle, at most `ms` milliseconds (never rejects). */
+async function settle(work: Promise<unknown>, ms: number): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  await Promise.race([
+    work.then(
+      () => {},
+      () => {},
+    ),
+    new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, ms);
+    }),
+  ]);
+  if (timer) clearTimeout(timer);
+}
+
+/**
+ * Executes one claimed scan end to end. Never throws: all failures are recorded on the scan.
+ * Each step gets its own abort signal (scan cancellation, worker shutdown or the step timeout),
+ * so a stopped step really stops and cannot store results after the scan moved on.
+ */
 export async function runScan(
   rt: ScanRuntime,
   scanRow: {
@@ -107,6 +139,8 @@ export async function runScan(
     projectId: string;
     configSnapshot: Record<string, unknown>;
     designSpecId?: string | null;
+    /** Owner recorded by claimNextScan; heartbeats and the final status are checked against it. */
+    workerId?: string | null;
   },
 ) {
   const snapshot = scanRow.configSnapshot as unknown as ScanConfigSnapshot;
@@ -117,6 +151,7 @@ export async function runScan(
     connectTimeoutMs: snapshot.pageTimeoutMs,
   });
   const abort = new AbortController();
+  const settleMs = rt.stepSettleMs ?? 10_000;
   const state: ScanState = {
     scanId: scanRow.id,
     projectId: scanRow.projectId,
@@ -142,13 +177,33 @@ export async function runScan(
     },
   };
 
+  let stopReason: StopReason | null = null;
+  // Read through a function: the value changes from timers/listeners while steps await.
+  const currentStop = (): StopReason | null => stopReason;
+  const stop = (reason: StopReason) => {
+    if (abort.signal.aborted) return;
+    stopReason = reason;
+    abort.abort();
+  };
+  const onShutdown = () => {
+    log.warn("worker shutting down: stopping the scan");
+    stop("shutdown");
+  };
+  if (rt.shutdown?.aborted) onShutdown();
+  else rt.shutdown?.addEventListener("abort", onShutdown, { once: true });
+
   const beat = setInterval(() => {
     pipelineRepo
-      .heartbeat(rt.db, scanRow.id)
-      .then(({ cancelRequested }) => {
-        if (cancelRequested && !abort.signal.aborted) {
+      .heartbeat(rt.db, scanRow.id, scanRow.workerId)
+      .then(({ cancelRequested, lost }) => {
+        if (lost) {
+          // Recovered as stale by another worker (e.g. after a database outage) or finished
+          // elsewhere: stop without writing anything more.
+          log.warn("scan is no longer running under this worker; stopping");
+          stop("lost");
+        } else if (cancelRequested && !abort.signal.aborted) {
           log.info("cancellation requested");
-          abort.abort();
+          stop("cancelled");
         }
       })
       .catch((err) => log.warn(errorFields(err), "heartbeat failed"));
@@ -157,19 +212,24 @@ export async function runScan(
   const started = Date.now();
   let fatal: string | null = null;
   let anyFailed = false;
-  let cancelled = false;
+  // Set once a step observed the scan being stopped; later steps are not started.
+  let stopped = false;
 
-  const runStep = async (stepKey: string, fn: () => Promise<StepOutcome>) => {
-    if (fatal || cancelled) return;
+  const runStep = async (stepKey: string, fn: (signal: AbortSignal) => Promise<StepOutcome>) => {
+    if (fatal || stopped || currentStop() === "lost") return;
     const slog = log.child({ step: stepKey });
     await pipelineRepo.updateStep(rt.db, scanRow.id, stepKey, { status: "running", started: true });
     const stepStart = Date.now();
+    const stepAbort = new AbortController();
+    const signal = AbortSignal.any([abort.signal, stepAbort.signal]);
+    let work: Promise<StepOutcome> | undefined;
     let outcome: StepOutcome;
     let timer: NodeJS.Timeout | undefined;
     try {
       if (abort.signal.aborted) throw new CancelledError();
+      work = fn(signal);
       outcome = await Promise.race([
-        fn(),
+        work,
         new Promise<never>((_, reject) => {
           timer = setTimeout(
             () =>
@@ -184,22 +244,38 @@ export async function runScan(
       ]);
       if (abort.signal.aborted) throw new CancelledError();
     } catch (err) {
+      if (timer) clearTimeout(timer);
       if (err instanceof CancelledError || abort.signal.aborted) {
-        cancelled = true;
-        await pipelineRepo.updateStep(rt.db, scanRow.id, stepKey, {
-          status: "skipped",
-          statusReason: "Cancelled by user",
-          finished: true,
-        });
-        slog.info("step cancelled");
+        stopped = true;
+        stepAbort.abort();
+        if (work) await settle(work, settleMs);
+        if (currentStop() === "lost") return;
+        await pipelineRepo.updateStep(
+          rt.db,
+          scanRow.id,
+          stepKey,
+          currentStop() === "shutdown"
+            ? {
+                status: "failed",
+                error: "Interrupted: the worker was shut down while this step was running",
+                finished: true,
+              }
+            : { status: "skipped", statusReason: "Cancelled by user", finished: true },
+        );
+        slog.info({ reason: currentStop() ?? "cancelled" }, "step stopped");
         return;
+      }
+      if (err instanceof StepTimeoutError) {
+        // Stop the step's remaining work and give it a moment to wind down before moving on.
+        stepAbort.abort();
+        if (work) await settle(work, settleMs);
       }
       outcome = {
         status: "failed",
         error:
           err instanceof StepTimeoutError
             ? err.message
-            : `Unexpected error: ${(err as Error).message}`,
+            : `Unexpected error: ${publicErrorMessage(err)}`,
       };
       slog.error(errorFields(err), "step crashed");
     } finally {
@@ -228,58 +304,117 @@ export async function runScan(
     );
   };
 
+  let crashed: unknown = null;
   try {
     log.info({ websiteUrl: snapshot.websiteUrl }, "scan started");
     state.references = await loadReferences(rt, scanRow.designSpecId ?? null, snapshot);
-    await runStep("preflight", () => preflight(rt, state));
-    await runStep("crawl", () => crawlStep(rt, state));
-    await runStep("capture", () => captureStep(rt, state));
+    await runStep("preflight", (signal) => preflight(rt, state, signal));
+    await runStep("crawl", (signal) => crawlStep(rt, state, signal));
+    await runStep("capture", (signal) => captureStep(rt, state, signal));
     // QA scanners: each one is an independent step; a failing scanner does not stop the others.
-    if (!fatal && !cancelled) {
+    if (!fatal && !stopped) {
       const env = scannerEnv(rt, state);
       let ctx: ScannerContext | null = null;
       for (const key of SCANNER_KEYS) {
         if (!snapshot.scanners.includes(key)) continue;
-        await runStep(key, async () => {
+        await runStep(key, async (signal) => {
           ctx ??= await buildScannerContext(env);
-          return runScannerStep(env, SCANNERS[key], ctx);
+          return runScannerStep(env, SCANNERS[key], withSignal(ctx, signal));
         });
       }
       // Reference comparisons run only when they were planned (the scan has references).
       const planned = await pipelineRepo.pendingStepKeys(rt.db, scanRow.id);
       for (const key of COMPARISON_KEYS) {
         if (!planned.has(key)) continue;
-        await runStep(key, async () => {
+        await runStep(key, async (signal) => {
           ctx ??= await buildScannerContext(env);
-          return runScannerStep(env, COMPARISON_SCANNERS[key], ctx);
+          return runScannerStep(env, COMPARISON_SCANNERS[key], withSignal(ctx, signal));
         });
       }
       // Issues: AI interpretation (when configured), then grounding and issue creation, which
       // always runs so every finding ends up in an issue even if the AI step fails.
-      const issues = issueEnv(rt, state);
-      if (planned.has("ai")) await runStep("ai", () => aiStep(issues));
-      if (planned.has("grounding")) await runStep("grounding", () => groundingStep(issues));
+      if (planned.has("ai")) await runStep("ai", (signal) => aiStep(issueEnv(rt, state, signal)));
+      if (planned.has("grounding"))
+        await runStep("grounding", (signal) => groundingStep(issueEnv(rt, state, signal)));
     }
+  } catch (err) {
+    // A database error outside a step's own work (e.g. while recording a step's status).
+    crashed = err;
+    log.error(errorFields(err), "scan crashed");
   } finally {
     clearInterval(beat);
+    rt.shutdown?.removeEventListener("abort", onShutdown);
     await state.browser?.close().catch(() => {});
     await dispatcher.close().catch(() => {});
   }
 
-  if (cancelled) {
-    await pipelineRepo.skipPendingSteps(rt.db, scanRow.id, "Scan cancelled");
-    await pipelineRepo.finishScan(rt.db, scanRow.id, "cancelled");
-  } else if (fatal) {
-    await pipelineRepo.skipPendingSteps(rt.db, scanRow.id, `Not run: ${fatal}`);
-    await pipelineRepo.finishScan(rt.db, scanRow.id, "failed", fatal);
-  } else {
-    await pipelineRepo.finishScan(
-      rt.db,
-      scanRow.id,
-      anyFailed ? "completed_with_failures" : "completed",
-    );
+  const reason = currentStop();
+  const summary = { durationMs: Date.now() - started, stopReason: reason, fatal, anyFailed };
+  if (reason === "lost") {
+    log.warn(summary, "scan stopped: it was recovered or finished elsewhere");
+    return;
   }
-  log.info({ durationMs: Date.now() - started, cancelled, fatal, anyFailed }, "scan finished");
+  try {
+    let recorded: boolean;
+    if (crashed) {
+      const error = `The scan stopped because of an internal error: ${publicErrorMessage(crashed)}`;
+      await pipelineRepo.failRunningSteps(rt.db, scanRow.id, error);
+      await pipelineRepo.skipPendingSteps(rt.db, scanRow.id, "Not run: the scan stopped");
+      recorded = await pipelineRepo.finishScan(
+        rt.db,
+        scanRow.id,
+        "failed",
+        error,
+        scanRow.workerId,
+      );
+    } else if (reason === "shutdown") {
+      await pipelineRepo.failRunningSteps(rt.db, scanRow.id, SHUTDOWN_ERROR);
+      await pipelineRepo.skipPendingSteps(rt.db, scanRow.id, "Not run: the worker was shut down");
+      recorded = await pipelineRepo.finishScan(
+        rt.db,
+        scanRow.id,
+        "failed",
+        SHUTDOWN_ERROR,
+        scanRow.workerId,
+      );
+    } else if (reason === "cancelled" || stopped) {
+      await pipelineRepo.skipPendingSteps(rt.db, scanRow.id, "Scan cancelled");
+      recorded = await pipelineRepo.finishScan(
+        rt.db,
+        scanRow.id,
+        "cancelled",
+        null,
+        scanRow.workerId,
+      );
+    } else if (fatal) {
+      await pipelineRepo.skipPendingSteps(rt.db, scanRow.id, `Not run: ${fatal}`);
+      recorded = await pipelineRepo.finishScan(
+        rt.db,
+        scanRow.id,
+        "failed",
+        fatal,
+        scanRow.workerId,
+      );
+    } else {
+      recorded = await pipelineRepo.finishScan(
+        rt.db,
+        scanRow.id,
+        anyFailed ? "completed_with_failures" : "completed",
+        null,
+        scanRow.workerId,
+      );
+    }
+    if (!recorded) log.warn(summary, "scan result not recorded: the scan is no longer running");
+    else log.info(summary, "scan finished");
+  } catch (err) {
+    // The database is unreachable: stale-scan recovery marks the scan failed later.
+    log.error({ ...errorFields(err), ...summary }, "could not record the scan result");
+  }
+}
+
+/** A scanner context whose live work (fetches, pages, loops) stops with the step's signal. */
+function withSignal(ctx: ScannerContext, signal: AbortSignal): ScannerContext {
+  return { ...ctx, signal, fetch: { ...ctx.fetch, signal } };
 }
 
 /**
@@ -350,7 +485,7 @@ async function loadCredentials(rt: ScanRuntime, s: ScanState): Promise<StepOutco
   }
 }
 
-async function preflight(rt: ScanRuntime, s: ScanState): Promise<StepOutcome> {
+async function preflight(rt: ScanRuntime, s: ScanState, signal: AbortSignal): Promise<StepOutcome> {
   const url = s.snapshot.websiteUrl;
   const check = validateWebsiteUrl(url, { allowedPrivateHosts: s.policy.allowedPrivateHosts });
   if (!check.ok)
@@ -376,7 +511,7 @@ async function preflight(rt: ScanRuntime, s: ScanState): Promise<StepOutcome> {
     throw err;
   }
 
-  const res = await guardedFetch(check.url, { ...s.fetchOpts, signal: s.abort.signal });
+  const res = await guardedFetch(check.url, { ...s.fetchOpts, signal });
   if (res.error) {
     const tls = /CERT|TLS|SSL|EPROTO|ERR_SSL/i.test(`${res.error.code} ${res.error.message}`);
     return {
@@ -422,7 +557,7 @@ async function preflight(rt: ScanRuntime, s: ScanState): Promise<StepOutcome> {
   });
 
   if (s.snapshot.respectRobots)
-    s.robots = await loadRobots(res.finalUrl, { ...s.fetchOpts, signal: s.abort.signal });
+    s.robots = await loadRobots(res.finalUrl, { ...s.fetchOpts, signal });
 
   const parts = [`Reachable: HTTP ${status} in ${res.durationMs} ms`];
   if (res.redirectChain.length)
@@ -462,14 +597,14 @@ function scannerEnv(rt: ScanRuntime, s: ScanState): ScannerEnv {
   };
 }
 
-function issueEnv(rt: ScanRuntime, s: ScanState): IssueStepEnv {
+function issueEnv(rt: ScanRuntime, s: ScanState, signal: AbortSignal): IssueStepEnv {
   return {
     db: rt.db,
     log: rt.log.child({ scanId: s.scanId }),
     config: rt.config,
     scanId: s.scanId,
     provider: rt.ai ?? createAIProvider(rt.config),
-    signal: s.abort.signal,
+    signal,
     designSpec: s.references.designSpec?.spec ?? null,
     state: s.issues,
   };
@@ -497,7 +632,7 @@ async function openContext(
   });
 }
 
-async function crawlStep(rt: ScanRuntime, s: ScanState): Promise<StepOutcome> {
+async function crawlStep(rt: ScanRuntime, s: ScanState, signal: AbortSignal): Promise<StepOutcome> {
   const browser = await ensureBrowser(rt, s);
   const desktop = s.snapshot.viewports[0] ?? { name: "desktop", width: 1440, height: 900 };
   const { context } = await openContext(rt, s, desktop);
@@ -511,7 +646,7 @@ async function crawlStep(rt: ScanRuntime, s: ScanState): Promise<StepOutcome> {
         concurrency: s.snapshot.concurrency,
         fetch: s.fetchOpts,
         robots: s.robots,
-        signal: s.abort.signal,
+        signal,
         renderLinks: (url) => renderLinks(context, url, s.snapshot.pageTimeoutMs),
       },
       async (p) => {
@@ -573,7 +708,11 @@ async function crawlStep(rt: ScanRuntime, s: ScanState): Promise<StepOutcome> {
   }
 }
 
-async function captureStep(rt: ScanRuntime, s: ScanState): Promise<StepOutcome> {
+async function captureStep(
+  rt: ScanRuntime,
+  s: ScanState,
+  signal: AbortSignal,
+): Promise<StepOutcome> {
   const browser = await ensureBrowser(rt, s);
   const capturable = await pipelineRepo.listCapturablePages(rt.db, s.scanId);
   // A URL that redirects to a page already in the list is the same document: capture it once,
@@ -609,7 +748,7 @@ async function captureStep(rt: ScanRuntime, s: ScanState): Promise<StepOutcome> 
       const { context, guard } = await openContext(rt, s, viewport);
       try {
         for (const p of pages) {
-          if (s.abort.signal.aborted) throw new CancelledError();
+          if (signal.aborted) throw new CancelledError();
           const target = p.finalUrl ?? p.url;
           const r = await capturePage(context, guard, target, viewport, {
             timeoutMs: s.snapshot.pageTimeoutMs,

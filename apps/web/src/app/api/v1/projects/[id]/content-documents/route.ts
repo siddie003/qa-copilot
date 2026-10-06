@@ -26,4 +26,5 @@ export const POST = authedHandler<Params>(
     );
     return json(doc, { status: 201 });
   },
+  { rateLimit: "upload" },
 );

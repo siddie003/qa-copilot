@@ -17,4 +17,5 @@ export const POST = authedHandler<Params>(
     log.info({ projectId: id, referenceId: ref.id }, "guideline document uploaded");
     return json(ref, { status: 201 });
   },
+  { rateLimit: "upload" },
 );

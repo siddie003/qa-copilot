@@ -14,6 +14,7 @@
     "cheerio": "^1.2.0",
     "mammoth": "^1.13.0",
     "mdast-util-from-markdown": "^2.1.0",
+    "tsx": "^4.23.15",
     "unpdf": "^1.8.1",
     "zod": "^4.6.5"
   },

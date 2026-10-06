@@ -63,6 +63,32 @@ async function checkMigrations(
   }
 }
 
+const READINESS_CACHE_MS = 2_000;
+const readinessCache = globalThis as unknown as {
+  __qaReadiness?: { at: number; details: boolean; report: Promise<ReadinessReport> };
+};
+
+/**
+ * Readiness for the public /health/ready endpoint: concurrent requests share one check and a
+ * result is reused for 2 s, so unauthenticated polling cannot turn into a database query and a
+ * storage write per request.
+ */
+export function runReadinessChecksCached(
+  opts: { includeDetails?: boolean } = {},
+): Promise<ReadinessReport> {
+  const details = Boolean(opts.includeDetails);
+  const cached = readinessCache.__qaReadiness;
+  if (cached && cached.details === details && Date.now() - cached.at < READINESS_CACHE_MS)
+    return cached.report;
+  const report = runReadinessChecks(opts);
+  readinessCache.__qaReadiness = { at: Date.now(), details, report };
+  // A failed check must not be cached as a rejected promise.
+  report.catch(() => {
+    if (readinessCache.__qaReadiness?.report === report) readinessCache.__qaReadiness = undefined;
+  });
+  return report;
+}
+
 /**
  * Runs real dependency checks. Used by /api/v1/health/ready and the Settings page.
  * `includeDetails` adds invalid variable names and filesystem paths (never secret values).

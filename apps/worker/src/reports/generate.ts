@@ -1,4 +1,4 @@
-import { APP_NAME, APP_VERSION, errorFields, type Logger } from "@qa/core";
+import { APP_NAME, APP_VERSION, errorFields, publicErrorMessage, type Logger } from "@qa/core";
 import { launchBrowser, renderPdf } from "@qa/browser";
 import { reportsRepo, type Database } from "@qa/db";
 import {
@@ -68,8 +68,11 @@ export async function processNextReport(rt: ReportRuntime): Promise<boolean> {
     );
   } catch (err) {
     log.error({ ...errorFields(err), durationMs: Date.now() - started }, "report failed");
-    const message = err instanceof Error ? err.message : String(err);
-    await reportsRepo.failReport(rt.db, job.id, `Report generation failed: ${message}`);
+    await reportsRepo.failReport(
+      rt.db,
+      job.id,
+      `Report generation failed: ${publicErrorMessage(err)}`,
+    );
   }
   return true;
 }

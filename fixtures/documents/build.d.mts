@@ -1,6 +1,6 @@
 export function buildZip(
   files: Record<string, string | Buffer>,
-  opts?: { deflate?: boolean },
+  opts?: { deflate?: boolean; declaredSizes?: Record<string, number> },
 ): Buffer;
 
 export type DocxBlock =

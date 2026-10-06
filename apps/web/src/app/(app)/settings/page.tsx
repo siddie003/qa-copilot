@@ -1,6 +1,7 @@
-import { ConfigError, describeConfig, getConfig } from "@qa/core";
+import { ConfigError, configWarnings, describeConfig, getConfig } from "@qa/core";
 import type { Metadata } from "next";
 import { connection } from "next/server";
+import { Alert } from "@/components/ui/alert";
 import { PageHeader } from "@/components/ui/page-header";
 import { StatusPill, type PillTone } from "@/components/ui/status-pill";
 import { runReadinessChecks } from "@/server/readiness";
@@ -42,8 +43,10 @@ export default async function SettingsPage() {
   const { config, database, storage, migrations } = report.checks;
 
   let summary: ReturnType<typeof describeConfig> | undefined;
+  let warnings: string[] = [];
   try {
     summary = describeConfig(getConfig());
+    warnings = configWarnings(getConfig());
   } catch (err) {
     if (!(err instanceof ConfigError)) throw err;
   }
@@ -54,6 +57,18 @@ export default async function SettingsPage() {
         title="Settings"
         description="Account, system status and configuration. Secrets are never displayed."
       />
+      {warnings.length > 0 && (
+        <section aria-labelledby="production-checks" className="mb-6 space-y-2">
+          <h2 id="production-checks" className="text-sm font-semibold">
+            Production configuration checks
+          </h2>
+          {warnings.map((w) => (
+            <Alert key={w} tone="info">
+              {w}
+            </Alert>
+          ))}
+        </section>
+      )}
       <div className="grid gap-6 xl:grid-cols-2">
         <Card title="Account">
           <Row label="Name">{user.name}</Row>

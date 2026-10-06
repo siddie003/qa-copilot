@@ -26,6 +26,13 @@ describe("browser capture", () => {
         res.writeHead(200, { "content-type": "text/html" });
         return res.end(`<h1>t</h1><img src="http://127.0.0.1:${internalPort}/secret.png">`);
       }
+      if (req.url === "/download") {
+        res.writeHead(200, {
+          "content-type": "application/octet-stream",
+          "content-disposition": 'attachment; filename="payload.exe"',
+        });
+        return res.end("MZ-not-really");
+      }
       res.end("secret");
     });
     await new Promise<void>((r) => internal.listen(0, "127.0.0.1", r));
@@ -39,6 +46,25 @@ describe("browser capture", () => {
 
   const policy = () => ({
     allowedPrivateHosts: [`localhost:${site.port}`, `localhost:${internalPort}`],
+  });
+
+  it("never saves files a scanned site tries to download (Phase 10)", async () => {
+    const viewport = { name: "desktop", width: 1440, height: 900 };
+    const { context } = await newGuardedContext(session, {
+      viewport,
+      userAgent: "QACopilotTest",
+      policy: policy(),
+    });
+    try {
+      const page = await context.newPage();
+      const download = page.waitForEvent("download", { timeout: 10_000 });
+      await page.goto(`http://localhost:${internalPort}/download`).catch(() => {});
+      const d = await download;
+      await expect(d.path()).rejects.toThrow(/acceptDownloads/);
+      expect(await d.failure()).toBeTruthy();
+    } finally {
+      await context.close();
+    }
   });
 
   it("captures DOM, screenshot, network, console and timings at desktop size", async () => {

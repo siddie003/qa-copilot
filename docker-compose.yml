@@ -1,0 +1,111 @@
+# QA Copilot with PostgreSQL, the web app and one worker (see docs/DEPLOYMENT.md).
+#
+#   cp deploy.env.example deploy.env      # fill in the secrets
+#   docker compose --env-file deploy.env up -d --build
+#
+# NOT VERIFIED: Docker was not available on the machine this was written on.
+# Put a TLS-terminating reverse proxy in front of the web port (APP_URL must be its https:// URL).
+
+name: qa-copilot
+
+x-app-env: &app-env
+  NODE_ENV: production
+  APP_URL: ${APP_URL:?Set APP_URL to the public https:// address}
+  DATABASE_URL: postgres://qa_copilot:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/qa_copilot
+  DATABASE_POOL_MAX: ${DATABASE_POOL_MAX:-10}
+  BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?Set BETTER_AUTH_SECRET (32+ random characters)}
+  ENCRYPTION_KEY: ${ENCRYPTION_KEY:?Set ENCRYPTION_KEY (64 hex characters)}
+  AUTH_ALLOW_SIGNUP: ${AUTH_ALLOW_SIGNUP:-false}
+  TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
+  CLIENT_IP_HEADER: ${CLIENT_IP_HEADER:-x-forwarded-for}
+  RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
+  STORAGE_DIR: /app/storage
+  MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-20}
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  AI_PROVIDER: ${AI_PROVIDER:-none}
+  AI_MODEL: ${AI_MODEL:-}
+  AI_EFFORT: ${AI_EFFORT:-}
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+  OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+  FIGMA_ACCESS_TOKEN: ${FIGMA_ACCESS_TOKEN:-}
+  SCAN_MAX_PAGES: ${SCAN_MAX_PAGES:-25}
+  SCAN_MAX_DEPTH: ${SCAN_MAX_DEPTH:-3}
+  SCAN_ALLOWED_PRIVATE_HOSTS: ${SCAN_ALLOWED_PRIVATE_HOSTS:-}
+  DEMO_MODE_ENABLED: "false"
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: qa_copilot
+      POSTGRES_USER: qa_copilot
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U qa_copilot -d qa_copilot"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    networks: [backend]
+    restart: unless-stopped
+
+  # Applies database migrations, then exits; web and worker start after it succeeded.
+  migrate:
+    build: { context: ., target: worker }
+    image: qa-copilot-worker:latest
+    working_dir: /app
+    command: ["node", "--import", "tsx", "packages/db/src/scripts/migrate.ts"]
+    environment: *app-env
+    depends_on:
+      postgres: { condition: service_healthy }
+    networks: [backend]
+    restart: "no"
+
+  web:
+    build: { context: ., target: web }
+    image: qa-copilot-web:latest
+    environment: *app-env
+    ports:
+      - "${WEB_BIND:-127.0.0.1}:${WEB_PORT:-3000}:3000"
+    volumes:
+      - storage:/app/storage
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    networks: [backend, frontend]
+    init: true
+    stop_grace_period: 30s
+    restart: unless-stopped
+
+  worker:
+    build: { context: ., target: worker }
+    image: qa-copilot-worker:latest
+    environment:
+      <<: *app-env
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-1}
+      WORKER_SHUTDOWN_GRACE_MS: ${WORKER_SHUTDOWN_GRACE_MS:-20000}
+      WORKER_HEALTH_HOST: 0.0.0.0
+    volumes:
+      - storage:/app/storage
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    # The worker needs the internet (it scans websites) but is not reachable from outside.
+    # Restrict its egress further with host firewall rules where possible (docs/DEPLOYMENT.md).
+    networks: [backend, egress]
+    init: true
+    shm_size: 1gb
+    # Grace period for running scans (WORKER_SHUTDOWN_GRACE_MS) plus time to record their state.
+    stop_grace_period: 60s
+    restart: unless-stopped
+
+networks:
+  # No route to the outside: PostgreSQL is only reachable by web, worker and migrate.
+  backend:
+    internal: true
+  frontend: {}
+  egress: {}
+
+volumes:
+  pgdata: {}
+  storage: {}

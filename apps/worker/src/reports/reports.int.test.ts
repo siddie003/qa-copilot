@@ -57,6 +57,14 @@ describe.skipIf(!hasTestDb)("report generation from stored scan data (real Postg
   let storage: Storage;
   const rt = () => ({ db: db(), storage, log: createLogger(), now: () => NOW });
 
+  // These scans are never claimed by a worker (pipelineRepo.finishScan only finishes running
+  // scans), so the test records the final status directly.
+  const finish = (id: string, status: "completed" | "completed_with_failures") =>
+    db()
+      .update(schema.scan)
+      .set({ status, startedAt: new Date(), finishedAt: new Date() })
+      .where(eq(schema.scan.id, id));
+
   async function newScan(findings: Record<string, NewFinding[]>) {
     const scan = (await pipelineRepo.createScan(db(), ownerId, projectId, {
       configSnapshot: {
@@ -183,7 +191,7 @@ describe.skipIf(!hasTestDb)("report generation from stored scan data (real Postg
         },
       })
       .where(and(eq(schema.scannerRun.scanId, scanId), eq(schema.scannerRun.stepKey, "links")));
-    await pipelineRepo.finishScan(db(), scanId, "completed_with_failures");
+    await finish(scanId, "completed_with_failures");
   });
   afterAll(async () => {
     await closeDb();
@@ -286,7 +294,7 @@ describe.skipIf(!hasTestDb)("report generation from stored scan data (real Postg
     const legacy = await newScan({
       seo: [f({ ruleId: "meta-description-missing", title: "No meta description" })],
     });
-    await pipelineRepo.finishScan(db(), legacy, "completed");
+    await finish(legacy, "completed");
     await reportsRepo.createReport(db(), ownerId, legacy, "md", ownerId);
     await processNextReport(rt());
     const [row] = await db().select().from(schema.report).where(eq(schema.report.scanId, legacy));

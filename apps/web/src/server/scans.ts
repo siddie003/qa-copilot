@@ -51,17 +51,28 @@ export async function startScan(userId: string, projectId: string) {
     designSpecVersion: spec?.version ?? null,
     contentDocuments: documents,
   };
-  const scan = await pipelineRepo.createScan(db, userId, project.id, {
-    configSnapshot: snapshot as unknown as Record<string, unknown>,
-    steps: planScanSteps(d.scanners, { designSpec: Boolean(spec), content: documents.length > 0 }),
-    triggeredByUserId: userId,
-    designSpecId: spec?.id ?? null,
-    contentSnapshotHash: documents.length
-      ? createHash("sha256")
-          .update(documents.map((x) => `${x.id}:${x.sha256}:${x.targetPath ?? ""}`).join("|"))
-          .digest("hex")
-      : null,
-  });
+  let scan;
+  try {
+    scan = await pipelineRepo.createScan(db, userId, project.id, {
+      configSnapshot: snapshot as unknown as Record<string, unknown>,
+      steps: planScanSteps(d.scanners, {
+        designSpec: Boolean(spec),
+        content: documents.length > 0,
+      }),
+      triggeredByUserId: userId,
+      designSpecId: spec?.id ?? null,
+      contentSnapshotHash: documents.length
+        ? createHash("sha256")
+            .update(documents.map((x) => `${x.id}:${x.sha256}:${x.targetPath ?? ""}`).join("|"))
+            .digest("hex")
+        : null,
+    });
+  } catch (err) {
+    // A concurrent request started a scan between the check above and the insert.
+    if (err instanceof pipelineRepo.ActiveScanExistsError)
+      throw new AppError("CONFLICT", "A scan of this project is already queued or running");
+    throw err;
+  }
   if (!scan) throw notFound("Project");
   return scan;
 }

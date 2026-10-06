@@ -131,6 +131,8 @@ export async function newGuardedContext(session: BrowserSession, opts: ContextOp
     serviceWorkers: "block",
     ignoreHTTPSErrors: false,
     javaScriptEnabled: true,
+    // Scanned sites are untrusted: nothing they offer is ever saved to the worker's disk.
+    acceptDownloads: false,
     ...(opts.auth?.credentials.type === "basic"
       ? {
           httpCredentials: {

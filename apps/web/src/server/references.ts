@@ -12,7 +12,7 @@ import {
   zodIssues,
 } from "@qa/core";
 import { contentRepo, designSpecsRepo, getDb, referencesRepo, secretsRepo } from "@qa/db";
-import { encryptSecret, validateDocumentUpload } from "@qa/security";
+import { encryptSecret, validateDocumentUpload, verifyDocumentContent } from "@qa/security";
 import { createLocalStorage } from "@qa/storage";
 import { z } from "zod";
 import type { UploadedFile } from "./http";
@@ -41,6 +41,9 @@ async function storeUpload(projectId: string, file: UploadedFile, folder: string
     throw check.code === "TOO_LARGE"
       ? new AppError("PAYLOAD_TOO_LARGE", check.message)
       : validationError(check.message, [{ path: "file", message: check.message }]);
+  // DOCX: every archive entry must expand to exactly its declared size (zip-bomb guard).
+  const content = await verifyDocumentContent({ kind: check.kind, bytes: file.bytes });
+  if (content) throw validationError(content.message, [{ path: "file", message: content.message }]);
   const ext = check.kind === "md" ? "md" : check.kind;
   const storageKey = `projects/${projectId}/${folder}/${randomUUID()}.${ext}`;
   await storage().put(storageKey, file.bytes);

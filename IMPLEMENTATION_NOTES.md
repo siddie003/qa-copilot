@@ -380,6 +380,87 @@
   all) and fails nothing; the history spec waits for `networkidle` at its end. The compare page's
   per-issue and per-finding links use `prefetch={false}` (dozens of links to heavy pages).
 
+## Phase 10 decisions
+- **CSP lives in `proxy.ts`** (Next.js 16 proxy, every page route; not `/api`, `_next/static`,
+  icons). Per request: 128-bit nonce, `content-security-policy` set on the request (Next.js reads
+  the nonce from it and stamps its scripts) and on the response. `script-src 'self' 'nonce-…'
+  'strict-dynamic'` (+ `'unsafe-eval'` and `ws:` only for `next dev`); `style-src 'unsafe-inline'`
+  because React `style` props (color swatches, global error page) are inline attributes, which
+  nonces do not cover. The root layout calls `connection()` so no page is prerendered without a
+  nonce (a prerendered page's scripts would be blocked). HSTS + `upgrade-insecure-requests` when
+  `APP_URL` (or, if unset in the proxy's environment, the request) is HTTPS. The static header in
+  `next.config.ts` stays for API/asset responses; browsers enforce both. Verified in a real
+  browser: all scripts carry the nonce, client navigation works, an injected inline handler is
+  blocked (`script-src-attr`). Note: `'strict-dynamic'` trusts scripts created by running scripts
+  (DevTools-evaluated code included), so the protection is against injected markup.
+- **Rate limits** (`server/rate-limit.ts`): in-memory sliding windows keyed by user id (never by IP,
+  so forged forwarding headers do not matter); `authedHandler(route, handler, { rateLimit })`
+  checks the bucket after authentication and before the body is read; every authenticated request
+  also counts against `api`. 429 problem+json with `Retry-After` (`http.ts`). Integration tests run
+  with `RATE_LIMIT_ENABLED=false` (vitest config); the rate-limit test enables it with
+  `vi.stubEnv` + `resetConfigCache()`.
+- **Sign-in lockout** (Better Auth `hooks`): before `/sign-in/email` the account is checked; after
+  it, only a 401 (wrong credentials) counts as a failure and success clears the count. Before-hook
+  `APIError`s are rethrown by Better Auth's dispatcher for direct `auth.api` calls but become
+  responses on the HTTP route, so tests use the real `/api/auth/[...all]` handler. Next.js sets
+  `x-forwarded-for` from the socket only when the header is absent, so without a proxy that
+  overwrites it the client chooses the IP Better Auth's per-IP limits see; `TRUSTED_PROXIES` /
+  `CLIENT_IP_HEADER` configure Better Auth's `advanced.ipAddress`.
+- **DOCX bombs:** JSZip (inside mammoth) compares an entry's size only after inflating all of it, so
+  `verifyDocumentContent()` (`@qa/security/upload`) inflates every entry with a streaming
+  `createInflateRaw`, counting bytes and aborting as soon as one exceeds its declared size; data
+  offsets are computed exactly as JSZip does (central directory offset → local header name/extra
+  lengths → compressed size from the central directory). Methods other than stored/deflate are
+  rejected. Runs on upload (web) and before parsing (worker).
+- **Isolated parsing:** `extractInIsolation()` (`@qa/reference`) runs `extractContentBlocks` in a
+  `worker_threads` Worker (`thread-entry.mjs`, plain JS that registers `tsx/esm/api` so the TS
+  sources load under the worker's tsx runtime and under vitest), `resourceLimits.maxOldGenerationSizeMb`
+  512, hard timeout = extraction limit + 10 s startup, `terminate()` on timeout (stops even
+  synchronous loops; verified). `ERR_WORKER_OUT_OF_MEMORY` becomes an `ExtractionError`. Heap
+  limits do not cover off-heap buffers, which is why the archive sizes are verified first.
+- **Worker reliability:** `runStep` gives each step `AbortSignal.any([scan, step])`; on timeout the
+  step signal is aborted and the step gets `stepSettleMs` (10 s) to wind down before the next step
+  starts; scanner contexts are re-bound to the step signal (`withSignal`) and `runScannerStep` does
+  not store findings once its signal is aborted (a mutation test showed the crawl adding 11 pages
+  after the scan had finished without this). Stop reasons: `cancelled` (step skipped "Cancelled by
+  user", scan cancelled), `shutdown` (running steps failed "Interrupted…", pending skipped, scan
+  failed), `lost` (heartbeat found the scan no longer running under this worker: nothing more is
+  written). `stopReason` is read through `currentStop()` because TypeScript narrows the variable
+  across awaits. `finishScan(…, workerId)` only updates `running` scans of that worker;
+  `failStaleScans` re-checks each candidate inside its own transaction; recovery runs every 60 s
+  in each worker loop. Shutdown: `stop({ graceMs })` waits, then aborts (`rt.shutdown`) and waits up
+  to 30 s more; reference/report loops just stop waiting after the grace period (their jobs are
+  recovered later).
+- **One active scan per project** is a partial unique index; `createScan` maps the 23505 on
+  `scan_one_active_per_project_uq` (drizzle wraps driver errors: the code is on `err.cause`) to
+  `ActiveScanExistsError`; the scan number is not consumed (same transaction). Tests that create
+  several scans in one project must finish the previous one first.
+- **Error text:** drizzle's `DrizzleQueryError` message is `Failed query: … params: …` with every
+  bound value. `stripQueryParams()` is applied to logged messages/stacks/causes (`errorFields`);
+  `publicErrorMessage()` (driver code + message, one line, ≤ 500 chars) is used wherever an error
+  is stored on a record (step errors, findings storage, reports, documents/references). Better
+  Auth's logger is routed through `authLogHandler` (messages and error fields only).
+- **Project deletion** (soft delete) now cancels queued scans (steps skipped "Project deleted…"),
+  requests cancellation of running ones, and deletes `project_secret` rows, in one transaction.
+- **Storage GC** (`apps/worker/src/maintenance/storage-gc.ts`, `npm run storage:gc`): lists only
+  recognized layouts (UUID names; symlinks and anything else are "unknown" and never removed),
+  loads the referencing rows, pure `planStorageGc`, removal through `storage.removePrefix` (key
+  validation). A folder's own modification time counts as activity. Not automatic: the shared
+  storage folder of dev and integration-test databases (existing test setup) makes automatic
+  deletion unsafe locally; production runs it deliberately.
+- **Readiness** (public) is coalesced: one check in flight, result reused for 2 s.
+- **Config warnings** (`configWarnings`, production only) are logged by the worker at start and by
+  the web process from `instrumentation.ts`, and listed on the Settings page.
+- **Docker:** one Dockerfile, `web` and `worker` targets from a shared build (full `npm ci`, `next
+  build`, `npm prune --omit=dev`); the worker image installs Chromium with Playwright and runs
+  `node --import tsx src/index.ts`; migrations run as a one-shot `migrate` service from the worker
+  image. Not verified (no Docker on this machine). `tsx` became a runtime dependency of
+  `@qa/worker`, `@qa/db` and `@qa/reference` so `npm ci --omit=dev` keeps working.
+- **E2E:** the acceptance spec sends `X-Forwarded-For: 198.51.100.10` so its UI sign-up does not
+  use the other specs' per-IP sign-up budget (Better Auth resets that counter only after 60 s
+  without sign-ups). Its first run found a WCAG 2.2 target-size failure on scan pages with a
+  content/design comparison step (stacked 16 px links); step links are now 24 px tall.
+
 ## Environment facts
 - PostgreSQL 18 binaries: `C:\Program Files\PostgreSQL\18\bin` (not on PATH). Service `postgresql-x64-18`.
 - No Docker, no Redis, no pnpm. Windows 11, Node 22.16.
@@ -389,11 +470,14 @@
   file reads afterwards ("Git Destructive"). Use ordinary `git add`/`git commit` for checkpoints.
 
 ## Unfinished tasks
-- None inside Phase 9. Next: Phase 10 (hardening, Docker, deployment docs, full acceptance
-  workflow) after approval. Phases 6, 7 + 8 and 9 each have a checkpoint commit.
+- None inside Phase 10; all planned phases (0–10) are implemented. Not verified in this
+  environment: the Docker image/Compose stack (no Docker), live AI providers and the live Figma
+  API (no keys), OS signal handling of the worker on Linux (Windows cannot deliver SIGTERM to a
+  Node process; the shutdown logic itself is covered by integration tests).
 
 ## Known bugs
-- None known.
+- None known. Known log noise: "The destination stream closed early" from `next start` when an
+  e2e test leaves a page while a streamed response is in flight (timing-dependent, harmless).
 
 ## Commands to resume
 ```bash
@@ -401,8 +485,9 @@ git status && git log --oneline
 npm install
 npm run typecheck && npm run lint && npm test
 npm run db:check
-npm run db:migrate
+npm run db:migrate     # run after every pull (0006 = one active scan per project)
 npm run dev            # web + worker (the worker also processes documents and Figma)
+npm run storage:gc     # dry run of the storage garbage collector
 npm run demo:site      # fixture website on http://localhost:4100
 npx playwright test    # after `npm run build`; stop stale servers on 3100/3191 first
 ```

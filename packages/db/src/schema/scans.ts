@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import {
   bigint,
   boolean,
@@ -8,6 +9,7 @@ import {
   text,
   timestamp,
   unique,
+  uniqueIndex,
   uuid,
   varchar,
 } from "drizzle-orm/pg-core";
@@ -46,6 +48,11 @@ export const scan = pgTable(
     unique("scan_project_number_uq").on(t.projectId, t.number),
     index("scan_project_created_idx").on(t.projectId, t.createdAt),
     index("scan_status_created_idx").on(t.status, t.createdAt),
+    // At most one queued or running scan per project, enforced by the database (concurrent
+    // "Start QA Scan" requests cannot both pass the application check).
+    uniqueIndex("scan_one_active_per_project_uq")
+      .on(t.projectId)
+      .where(sql`status in ('queued', 'running')`),
   ],
 );
 

@@ -271,7 +271,7 @@ export function LiveScan({
                   {r.findingCount > 0 && (
                     <Link
                       href={`/projects/${projectId}/scans/${scan.id}/findings?scanner=${r.stepKey}`}
-                      className="block text-xs font-medium text-primary hover:underline"
+                      className="flex min-h-6 w-fit items-center text-xs font-medium text-primary hover:underline"
                     >
                       {r.findingCount} finding{r.findingCount === 1 ? "" : "s"}
                     </Link>
@@ -280,7 +280,7 @@ export function LiveScan({
                     r.status === "completed" && (
                       <Link
                         href={`/projects/${projectId}/scans/${scan.id}/comparisons`}
-                        className="block text-xs font-medium text-primary hover:underline"
+                        className="flex min-h-6 w-fit items-center text-xs font-medium text-primary hover:underline"
                       >
                         View comparison (matches and mismatches)
                       </Link>
@@ -290,7 +290,7 @@ export function LiveScan({
                       (r.status === "completed" || r.status === "failed"))) && (
                     <Link
                       href={issuesHref}
-                      className="block text-xs font-medium text-primary hover:underline"
+                      className="flex min-h-6 w-fit items-center text-xs font-medium text-primary hover:underline"
                     >
                       {r.stepKey === "ai"
                         ? "View AI requests and evidence checks"

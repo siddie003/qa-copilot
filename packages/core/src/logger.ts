@@ -1,4 +1,5 @@
 import pino, { type DestinationStream, type Logger, type LoggerOptions } from "pino";
+import { stripQueryParams } from "./errors";
 import { REDACT_PATHS } from "./redact";
 
 export type { Logger };
@@ -35,20 +36,29 @@ export function getLogger(): Logger {
   return rootLogger;
 }
 
-/** Serializes an unknown thrown value into log fields. */
+/**
+ * Serializes an unknown thrown value into log fields. Bound query parameters (drizzle's
+ * "Failed query … params: …" errors) are removed from the message and the stack; the cause's
+ * message and code (e.g. the PostgreSQL error) are kept.
+ */
 export function errorFields(err: unknown): {
   errName: string;
   errMessage: string;
   errCode?: string;
   errStack?: string;
+  errCause?: string;
 } {
   if (err instanceof Error) {
-    const code = (err as { code?: unknown }).code;
+    const cause = err.cause as { code?: unknown; message?: unknown } | undefined;
+    const code = (err as { code?: unknown }).code ?? cause?.code;
     return {
       errName: err.name,
-      errMessage: err.message,
+      errMessage: stripQueryParams(err.message),
       ...(typeof code === "string" ? { errCode: code } : {}),
-      ...(err.stack ? { errStack: err.stack } : {}),
+      ...(err.stack ? { errStack: stripQueryParams(err.stack) } : {}),
+      ...(cause && typeof cause.message === "string"
+        ? { errCause: stripQueryParams(cause.message) }
+        : {}),
     };
   }
   return { errName: "NonError", errMessage: String(err) };

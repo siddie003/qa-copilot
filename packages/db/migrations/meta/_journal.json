@@ -43,6 +43,13 @@
       "when": 1791171713075,
       "tag": "0005_issue_workflow_reports",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1791191307983,
+      "tag": "0006_production_hardening",
+      "breakpoints": true
     }
   ]
 }

@@ -2,6 +2,63 @@
 
 ## [Unreleased]
 
+### Phase 10: Production hardening (2026-10-05)
+#### Security
+- Nonce-based Content-Security-Policy on every page (`proxy.ts`, `lib/csp.ts`): scripts only with
+  the per-request nonce + `strict-dynamic`, no inline handlers, `frame-ancestors 'none'`,
+  `object-src 'none'`, `upgrade-insecure-requests` on HTTPS; HSTS for HTTPS deployments. All
+  pages render per request so their scripts carry the nonce.
+- Per-user API rate limits (all requests, scan starts, uploads, reports, design references, new
+  projects) with 429 + `Retry-After`; `RATE_LIMIT_ENABLED`.
+- Failed sign-ins limited per account (10 per 15 minutes, independent of the client IP); per-IP
+  limits configurable for reverse proxies (`TRUSTED_PROXIES`, `CLIENT_IP_HEADER`). The sign-in
+  form shows the wait time.
+- DOCX uploads: every archive entry is decompressed (counted, not kept) and must match its
+  declared size, closing zip bombs that understate their content; unsupported compression and
+  out-of-range entries are rejected. Checked on upload and again by the worker.
+- Documents are parsed in a worker thread with a 512 MB heap limit and a hard time limit.
+- Site credentials: control characters (header injection) and colons in Basic usernames refused.
+- Deleting a project cancels its queued/running scans and deletes its stored site credentials and
+  Figma token.
+- Database errors are reduced to the driver's code and message wherever they are stored or shown
+  (`publicErrorMessage`); logs never contain bound query parameters (`stripQueryParams` in
+  `errorFields`); Better Auth's own log output goes through the structured logger.
+- Chromium scan and PDF contexts refuse downloads.
+- The public readiness endpoint shares one check between concurrent requests and reuses it for 2 s.
+#### Reliability
+- One queued or running scan per project, enforced by a unique index (concurrent starts → 409).
+- Stale scans, documents, Figma reads and reports are recovered every minute (not only at worker
+  start), race-safe across workers.
+- Heartbeats and the final scan status are bound to the owning worker: a scan recovered elsewhere
+  is never overwritten.
+- Each pipeline step has its own abort signal: a timed-out step is stopped and cannot store
+  findings after the scan moved on; scanner findings are not stored once their step was stopped.
+- Graceful worker shutdown: running scans get `WORKER_SHUTDOWN_GRACE_MS`, then are recorded as
+  failed ("the worker was shut down") with what they stored; a database failure during a scan
+  still records a final state.
+- Storage garbage collection (`npm run storage:gc`, dry run by default).
+#### Deployment
+- `Dockerfile` (web and worker targets), `docker-compose.yml` (PostgreSQL, migrate, web, worker),
+  `.dockerignore`, `deploy.env.example` — not verified (no Docker available).
+- `docs/DEPLOYMENT.md`: production configuration, reverse proxy, operations, security checklist.
+- `tsx` is a runtime dependency of the worker, the database package and the reference package.
+- Configuration warnings for risky production settings (logged at start, shown in Settings);
+  `WORKER_HEALTH_HOST` for container probes.
+#### Database
+- Migration `0006_production_hardening`: unique partial index `scan_one_active_per_project_uq`
+  (queued duplicates are cancelled first, with a reason).
+#### Tests
+- Security integration tests: IDOR matrix over every API route, concurrent scan starts, rate
+  limits, account lockout over the real auth route, forged-size DOCX upload, header injection.
+- Worker reliability integration tests (real Chromium): step timeout stops work, shutdown,
+  ownership loss, stale recovery, migration 0006 duplicate cleanup.
+- Upload fuzzing, DOCX content verification, isolated parsing (runaway and memory-hungry
+  parsers), CSP, proxy, rate limiter, config, error sanitization, download refusal, storage GC.
+- End-to-end acceptance workflow with CSP checks on every page.
+#### Changed
+- `pipelineRepo.finishScan` only finishes `running` scans (and, with a worker id, only the owner's).
+- The project deletion dialog explains that scans are stopped and credentials deleted.
+
 ### Phase 9: Scan history and comparison (2026-10-05)
 #### Added
 - Comparison of two finished scans (`@qa/core/comparison`): new, reopened, changed, resolved,
