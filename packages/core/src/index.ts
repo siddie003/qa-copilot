@@ -7,7 +7,10 @@ export * from "./design-spec";
 export * from "./content";
 export * from "./pipeline";
 export * from "./comparison";
+export * from "./explain";
 export * from "./scan-auth";
+export * from "./page-links";
+export * from "./fonts";
 export * from "./logger";
 export * from "./redact";
 

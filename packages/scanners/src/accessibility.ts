@@ -1,7 +1,7 @@
 import AxeBuilder from "@axe-core/playwright";
 import type { Page } from "playwright";
 import type { Severity } from "@qa/core";
-import type { CheckSummary, FindingDraft, Scanner, ScannerContext } from "./types";
+import type { CheckSummary, FindingDraft, PageRecord, Scanner, ScannerContext } from "./types";
 import {
   analyzablePages,
   captureFor,
@@ -26,7 +26,8 @@ const LOWER: Record<Severity, Severity> = {
   info: "info",
 };
 const MAX_NODES_PER_RULE = 15;
-const MAX_PAGES = 25;
+/** Page cap when the context sets none (the worker passes the scan's page limit by default). */
+export const DEFAULT_ACCESSIBILITY_MAX_PAGES = 25;
 const FOCUS_ELEMENTS = 25;
 const CONCURRENCY = 3;
 
@@ -64,17 +65,24 @@ export const accessibilityScanner: Scanner = {
   version: "1.0.0",
   async run(ctx: ScannerContext) {
     const analyzable = analyzablePages(ctx.pages);
-    const pages = analyzable.slice(0, MAX_PAGES);
+    const maxPages = ctx.limits?.accessibilityMaxPages ?? DEFAULT_ACCESSIBILITY_MAX_PAGES;
+    const pages = analyzable.slice(0, maxPages);
     const checks: CheckSummary = { evaluated: 0, inconclusive: [] };
     const merged = new Map<string, Merged>();
     let axeVersion = "unknown";
     let failedRuns = 0;
+    /** Viewports per page not analyzed because the step's time budget was used up. */
+    const outOfTime = new Map<PageRecord, string[]>();
 
     const jobs = pages.flatMap((p) => ctx.viewports.map((viewport) => ({ p, viewport })));
     await pool(
       jobs,
       CONCURRENCY,
       async ({ p, viewport }) => {
+        if (ctx.limits?.deadline && Date.now() > ctx.limits.deadline) {
+          outOfTime.set(p, [...(outOfTime.get(p) ?? []), viewport.name]);
+          return;
+        }
         {
           let live;
           try {
@@ -180,10 +188,16 @@ export const accessibilityScanner: Scanner = {
     );
     // Pages beyond the limit were not analyzed: say so per page (scan comparisons then never
     // count their earlier accessibility issues as resolved).
-    for (const p of analyzable.slice(MAX_PAGES))
+    for (const p of analyzable.slice(maxPages))
       checks.inconclusive.push({
         check: "axe-core analysis",
-        reason: `Not analyzed: accessibility checks are limited to the first ${MAX_PAGES} pages of a scan`,
+        reason: `Not analyzed: accessibility checks are limited to the first ${maxPages} pages of a scan (SCAN_ACCESSIBILITY_MAX_PAGES)`,
+        pageUrl: displayUrl(p),
+      });
+    for (const [p, viewports] of outOfTime)
+      checks.inconclusive.push({
+        check: "axe-core analysis",
+        reason: `Not analyzed at ${viewports.join(", ")}: the accessibility step's time budget (80% of SCAN_SCANNER_TIMEOUT_MS) was used up`,
         pageUrl: displayUrl(p),
       });
 
@@ -207,7 +221,18 @@ export const accessibilityScanner: Scanner = {
         toolName: "axe-core",
         toolVersion: axeVersion,
       };
-    if (failedRuns === total)
+    const skipped = [...outOfTime.values()].reduce((s, v) => s + v.length, 0);
+    const analyzed = total - failedRuns - skipped;
+    if (analyzed === 0 && skipped > 0)
+      return {
+        status: "inconclusive",
+        statusReason: "The time budget was used up before any page could be analyzed",
+        findings,
+        checks,
+        toolName: "axe-core",
+        toolVersion: axeVersion,
+      };
+    if (analyzed === 0)
       return {
         status: "failed",
         statusReason: "axe-core could not analyze any page",
@@ -216,9 +241,15 @@ export const accessibilityScanner: Scanner = {
         toolName: "axe-core",
         toolVersion: axeVersion,
       };
+    const notCovered = [
+      skipped ? `${skipped} not analyzed (time budget)` : null,
+      analyzable.length > pages.length
+        ? `${analyzable.length - pages.length} page(s) beyond the limit of ${maxPages}`
+        : null,
+    ].filter(Boolean);
     return {
       status: "completed",
-      statusReason: `${total - failedRuns} of ${total} page/viewport combinations analyzed (WCAG 2.2 A/AA + best practices); ${findings.length} violation${findings.length === 1 ? "" : "s"}; ${checks.inconclusive.length} check(s) need manual review`,
+      statusReason: `${analyzed} of ${total} page/viewport combinations analyzed (WCAG 2.2 A/AA + best practices)${notCovered.length ? ` (${notCovered.join("; ")})` : ""}; ${findings.length} violation${findings.length === 1 ? "" : "s"}; ${checks.inconclusive.length} check(s) need manual review`,
       findings,
       checks,
       toolName: "axe-core",

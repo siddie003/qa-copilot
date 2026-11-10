@@ -21,6 +21,21 @@ describe("parseFigmaUrl", () => {
     },
   );
 
+  it("uses the branch key of a branch link (the API accepts it as the file key)", () => {
+    expect(
+      parseFigmaUrl(
+        "https://www.figma.com/design/AbCdEfGh1234/branch/BrAnChKeY5678/Marketing?node-id=1-2",
+      ),
+    ).toEqual({
+      ok: true,
+      url: "https://www.figma.com/design/AbCdEfGh1234/branch/BrAnChKeY5678?node-id=1-2",
+      fileKey: "BrAnChKeY5678",
+      mainFileKey: "AbCdEfGh1234",
+      nodeIds: ["1:2"],
+    });
+    expect(parseFigmaUrl("https://www.figma.com/design/AbCdEfGh1234/branch/x/y").ok).toBe(false);
+  });
+
   it.each([
     "not a url",
     "http://www.figma.com/design/AbCdEfGh1234/x",

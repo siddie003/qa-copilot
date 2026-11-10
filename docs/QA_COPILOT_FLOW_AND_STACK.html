@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>QA Copilot Flow &amp; Stack</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  /* Layout: a single reading column (about 70rem) with full-width diagram panels; sections follow the order a reader asks questions: what do I do, what does the scan do, what runs where, what is it built with. */
+  :root {
+    --bg: #f6f7f9;
+    --surface: #ffffff;
+    --fg: #17202b;
+    --muted: #5a6677;
+    --line: #d9dee6;
+    --accent: #1f5fae;
+    --accent-soft: #e6eef9;
+    --ok: #1d7a4f;
+    --warn: #a35b00;
+    --font-body: "Public Sans", "Segoe UI", system-ui, sans-serif;
+    --font-mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0f141b; --surface: #161d27; --fg: #e5eaf1; --muted: #9aa6b6; --line: #2a3441;
+      --accent: #7fb0f0; --accent-soft: #1b2a3e; --ok: #5cc493; --warn: #e5a54b; color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0f141b; --surface: #161d27; --fg: #e5eaf1; --muted: #9aa6b6; --line: #2a3441;
+    --accent: #7fb0f0; --accent-soft: #1b2a3e; --ok: #5cc493; --warn: #e5a54b; color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--fg); font-family: var(--font-body);
+    font-size: 15px; line-height: 1.6;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    padding-block: 40px 64px;
+  }
+  .page { max-width: 70rem; margin: 0 auto; display: grid; gap: 48px; }
+  header { display: grid; gap: 10px; }
+  .eyebrow { font-family: var(--font-mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+  h1 { font-size: clamp(28px, 4vw, 40px); line-height: 1.15; margin: 0; text-wrap: balance; font-weight: 700; }
+  h2 { font-size: 22px; margin: 0; text-wrap: balance; font-weight: 700; }
+  h3 { font-size: 15px; margin: 0; font-weight: 600; }
+  p { margin: 0; max-width: 68ch; }
+  .lead { color: var(--muted); font-size: 16px; }
+  section { display: grid; gap: 16px; min-width: 0; }
+  .facts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+  .chip { font-family: var(--font-mono); font-size: 12px; padding: 3px 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--muted); }
+  .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 20px; overflow-x: auto; min-width: 0; }
+  .panel pre.mermaid { margin: 0; min-width: 640px; display: flex; justify-content: center; background: transparent; }
+  .notes { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+  .note { border-left: 3px solid var(--accent); padding: 4px 0 4px 12px; display: grid; gap: 4px; min-width: 0; }
+  .note p { color: var(--muted); font-size: 14px; }
+  .stack { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+  .layer { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; display: grid; gap: 10px; align-content: start; min-width: 0; }
+  .layer h3 { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  .layer h3 span { font-family: var(--font-mono); font-size: 11px; color: var(--muted); font-weight: 400; letter-spacing: .04em; text-transform: uppercase; }
+  dl { margin: 0; display: grid; grid-template-columns: minmax(120px, 42%) 1fr; gap: 6px 12px; }
+  dt { font-weight: 600; font-size: 14px; }
+  dd { margin: 0; color: var(--muted); font-size: 14px; min-width: 0; }
+  code, .mono { font-family: var(--font-mono); font-size: 13px; }
+  .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; min-width: 640px; font-size: 14px; }
+  th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 600; background: var(--accent-soft); }
+  tr:last-child td { border-bottom: 0; }
+  td code { white-space: nowrap; color: var(--accent); }
+  .legend { display: flex; flex-wrap: wrap; gap: 16px; color: var(--muted); font-size: 13px; }
+  .legend b { color: var(--fg); font-weight: 600; }
+  footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line); padding-top: 16px; }
+  @media (max-width: 520px) { dl { grid-template-columns: 1fr; } dt { margin-top: 6px; } }
+</style>
+</head>
+<body>
+
+<div class="page">
+  <header>
+    <div class="eyebrow">QA Copilot · architecture overview</div>
+    <h1>How QA Copilot tests a website</h1>
+    <p class="lead">QA Copilot crawls a website in a real browser, runs seven automated QA scanners, compares the pages with the project's Figma design, brand guidelines and approved content, and turns the evidence into grouped issues and reports. This page shows the workflow, the scan pipeline, the system architecture and the technology used.</p>
+    <div class="facts">
+      <span class="chip">TypeScript monorepo</span>
+      <span class="chip">2 apps · 10 packages</span>
+      <span class="chip">Node.js 22</span>
+      <span class="chip">PostgreSQL</span>
+      <span class="chip">Playwright · Chromium</span>
+    </div>
+  </header>
+
+  <section aria-labelledby="flow-user">
+    <h2 id="flow-user">1. What the tester does</h2>
+    <p>The setup wizard collects the six inputs. Extracted design values stay a draft until someone confirms them; a scan uses the references exactly as they are when it starts.</p>
+    <div class="panel">
+<pre class="mermaid">
+flowchart LR
+  A["Sign in"] --> B["New project wizard"]
+  subgraph W["Setup wizard (5 steps)"]
+    direction TB
+    B1["1 · Project<br/>website URL, brand guidelines, font files"]
+    B2["2 · Figma / brand<br/>Figma link, content documents, page links"]
+    B3["3 · Configure scan<br/>scanners, viewports, page and depth limits"]
+    B4["4 · Review"]
+    B5["5 · Start scan"]
+    B1 --> B2 --> B3 --> B4 --> B5
+  end
+  B --> B1
+  B5 --> R["References page<br/>wait until every source is Ready"]
+  R --> D{"Design draft<br/>confirmed?"}
+  D -- "No" --> C["Review values, Confirm draft"] --> D
+  D -- "Yes" --> S["Start QA Scan<br/>authorization confirmed"]
+  S --> L["Live progress<br/>step by step"]
+  L --> I["Issues, comparisons, pages<br/>with evidence and fix guides"]
+  I --> T["Issue workflow<br/>assign, resolve, track over scans"]
+  I --> P["Reports<br/>PDF, Markdown, JSON"]
+  T --> H["Scan history<br/>compare two scans"]
+</pre>
+    </div>
+    <div class="notes">
+      <div class="note"><h3>Six inputs</h3><p>Website URL, brand guidelines, font files, Figma design URL, content documents and page links.</p></div>
+      <div class="note"><h3>Readiness guard</h3><p>Start QA Scan stays disabled while the design draft is unconfirmed or sources are still processing, unless the tester ticks "Start anyway".</p></div>
+      <div class="note"><h3>Re-scans</h3><p>Issues keep their identity across scans, so a fix shows as Resolved only when a later scan no longer finds it.</p></div>
+    </div>
+  </section>
+
+  <section aria-labelledby="flow-scan">
+    <h2 id="flow-scan">2. What happens during a scan</h2>
+    <p>The worker runs every scan as a fixed sequence of steps. Each step records its status, reason and finding count, so a skipped or failed step is reported, never shown as completed.</p>
+    <div class="panel">
+<pre class="mermaid">
+flowchart TD
+  Q[("Scan queued<br/>PostgreSQL")] --> P1["Preparing website<br/>reachability, technology, robots.txt"]
+  P1 --> P2["Crawling pages<br/>same-site links within limits + your page links"]
+  P2 --> P3["Browser capture<br/>each page at desktop, tablet and mobile"]
+  P3 --> SC
+  subgraph SC["QA scanners (evidence-backed findings)"]
+    direction LR
+    S1["Accessibility<br/>axe-core, WCAG 2.2"]
+    S2["Security<br/>headers, cookies, CSP, SRI"]
+    S3["SEO<br/>metadata, headings, sitemap"]
+    S4["Links<br/>broken links, failed files"]
+    S5["Performance<br/>Core Web Vitals, weight"]
+    S6["Responsive<br/>overflow, overlaps, targets"]
+  end
+  SC --> CMP
+  subgraph CMP["Reference comparisons"]
+    direction LR
+    C1["Design comparison<br/>vs confirmed design reference"]
+    C2["Content comparison<br/>vs approved documents"]
+  end
+  CMP --> DQ["Design Quality and Typography (7th scanner)<br/>headings, fonts, image clarity, spacing"]
+  DQ --> AI["AI analysis (optional)<br/>plain-language issue text"]
+  AI --> G["Evidence validation<br/>AI text checked against the evidence"]
+  G --> ISS["Grouped issues<br/>severity, verdict, fix guide"]
+  ISS --> REP["Report generation on request<br/>PDF via Chromium, Markdown, JSON"]
+
+  REF[("Design reference<br/>Figma + guidelines")] -.-> C1
+  DOC[("Approved content<br/>PDF, DOCX, MD, TXT")] -.-> C2
+  FNT[("Brand fonts")] -.-> DQ
+</pre>
+    </div>
+    <div class="legend">
+      <span><b>Confirmed</b> finding: the evidence proves it.</span>
+      <span><b>Potential</b>: needs a person to check.</span>
+      <span><b>Unable to verify</b>: listed with the reason, never guessed.</span>
+    </div>
+  </section>
+
+  <section aria-labelledby="arch">
+    <h2 id="arch">3. System architecture</h2>
+    <p>Two processes share one PostgreSQL database. The web app accepts requests and queues work; the worker picks it up immediately through PostgreSQL LISTEN/NOTIFY and does all crawling, browser work and calls to Figma and the AI provider.</p>
+    <div class="panel">
+<pre class="mermaid">
+flowchart LR
+  U["Tester's browser"] -->|HTTPS| WEB
+  subgraph WEB["Web app · Next.js 16 + React 19"]
+    direction TB
+    UI["Pages and forms<br/>Tailwind CSS"]
+    API["REST API /api/v1<br/>Zod validation, rate limits"]
+    AUTH["Better Auth<br/>email and password sessions"]
+  end
+  WEB -->|"Drizzle ORM"| DB[("PostgreSQL<br/>projects, scans, findings, issues,<br/>references, job queue")]
+  WEB --> ST[("File storage<br/>uploads, screenshots,<br/>snapshots, reports")]
+  DB <-->|"LISTEN / NOTIFY"| WK
+  subgraph WK["Worker · Node.js"]
+    direction TB
+    SW["Scan worker"]
+    RW["Reference worker<br/>Figma, guidelines, documents"]
+    PW["Report worker"]
+  end
+  WK --> ST
+  SW --> BR["Playwright · Chromium<br/>headless, guarded"]
+  BR --> GP["Network guard proxy<br/>blocks private and internal addresses"]
+  GP -->|"normal page requests"| SITE["Website under test"]
+  RW -->|"REST API, token in .env"| FIG["Figma API"]
+  SW -->|"optional"| LLM["AI provider<br/>Gemini, Anthropic, OpenAI-compatible, Groq"]
+</pre>
+    </div>
+    <div class="notes">
+      <div class="note"><h3>Safe by default</h3><p>Every outgoing request goes through SSRF rules: scans cannot reach private networks, and only normal page requests are made.</p></div>
+      <div class="note"><h3>Secrets stay server-side</h3><p>Figma and AI keys live in <code>.env</code> or are encrypted per project; they are never sent to the browser.</p></div>
+      <div class="note"><h3>Quota aware</h3><p>Figma reads check the file version first, and AI calls are paced to the provider's free-tier limits.</p></div>
+    </div>
+  </section>
+
+  <section aria-labelledby="stack">
+    <h2 id="stack">4. Tech stack</h2>
+    <div class="stack">
+      <div class="layer">
+        <h3>Language and runtime <span>foundation</span></h3>
+        <dl>
+          <dt>TypeScript</dt><dd>All apps and packages, strict typing</dd>
+          <dt>Node.js 22</dt><dd>Runtime for web app and worker</dd>
+          <dt>npm workspaces</dt><dd>Monorepo with shared packages</dd>
+          <dt>Zod 4</dt><dd>Config, API and data validation</dd>
+          <dt>Pino</dt><dd>Structured logging</dd>
+        </dl>
+      </div>
+      <div class="layer">
+        <h3>Web app <span>apps/web</span></h3>
+        <dl>
+          <dt>Next.js 16</dt><dd>App Router, server components, API routes</dd>
+          <dt>React 19</dt><dd>User interface</dd>
+          <dt>Tailwind CSS 4</dt><dd>Styling</dd>
+          <dt>Lucide</dt><dd>Icons</dd>
+          <dt>Better Auth</dt><dd>Sign-up, sign-in, sessions</dd>
+        </dl>
+      </div>
+      <div class="layer">
+        <h3>Data <span>packages/db, storage</span></h3>
+        <dl>
+          <dt>PostgreSQL</dt><dd>All data, plus the job queue (LISTEN/NOTIFY)</dd>
+          <dt>Drizzle ORM</dt><dd>Schema, queries, migrations</dd>
+          <dt>node-postgres (pg)</dt><dd>Database driver</dd>
+          <dt>Local file storage</dt><dd>Uploads, screenshots, DOM snapshots, reports</dd>
+        </dl>
+      </div>
+      <div class="layer">
+        <h3>Crawling and browser <span>crawler, browser</span></h3>
+        <dl>
+          <dt>Playwright + Chromium</dt><dd>Page capture at three viewports, PDF reports</dd>
+          <dt>undici</dt><dd>HTTP client for crawling and link checks</dd>
+          <dt>Cheerio</dt><dd>HTML parsing</dd>
+          <dt>robots-parser</dt><dd>robots.txt rules</dd>
+          <dt>fast-xml-parser</dt><dd>Sitemaps</dd>
+        </dl>
+      </div>
+      <div class="layer">
+        <h3>QA scanners <span>packages/scanners</span></h3>
+        <dl>
+          <dt>axe-core</dt><dd>Accessibility (WCAG 2.2 A/AA)</dd>
+          <dt>Chrome DevTools data</dt><dd>Core Web Vitals, rendered fonts</dd>
+          <dt>culori</dt><dd>Color distance (ΔE) for design checks</dd>
+          <dt>diff</dt><dd>Word-level content comparison</dd>
+          <dt>Own rule engines</dt><dd>Security, SEO, links, responsive, design quality</dd>
+        </dl>
+      </div>
+      <div class="layer">
+        <h3>References <span>packages/reference</span></h3>
+        <dl>
+          <dt>Figma REST API</dt><dd>Text and color styles, buttons, containers</dd>
+          <dt>unpdf</dt><dd>PDF content documents</dd>
+          <dt>mammoth</dt><dd>Word (DOCX) documents</dd>
+          <dt>mdast</dt><dd>Markdown documents and guidelines</dd>
+          <dt>Font validator</dt><dd>TTF, OTF, WOFF, WOFF2 brand fonts</dd>
+        </dl>
+      </div>
+      <div class="layer">
+        <h3>AI <span>packages/ai</span></h3>
+        <dl>
+          <dt>Google Gemini</dt><dd>Current provider (free tier)</dd>
+          <dt>Anthropic SDK</dt><dd>Claude models, optional</dd>
+          <dt>OpenAI-compatible, Groq</dt><dd>Alternative providers</dd>
+          <dt>Grounding checks</dt><dd>AI text accepted only if the evidence supports it</dd>
+        </dl>
+      </div>
+      <div class="layer">
+        <h3>Security <span>packages/security</span></h3>
+        <dl>
+          <dt>ipaddr.js</dt><dd>Private-address (SSRF) blocking</dd>
+          <dt>Guard proxy</dt><dd>Filters every browser request</dd>
+          <dt>Upload checks</dt><dd>File type, size and content validation</dd>
+          <dt>Encryption</dt><dd>Per-project secrets encrypted at rest</dd>
+        </dl>
+      </div>
+      <div class="layer">
+        <h3>Quality and delivery <span>tooling</span></h3>
+        <dl>
+          <dt>Vitest</dt><dd>Unit and integration tests</dd>
+          <dt>Playwright Test</dt><dd>End-to-end tests with axe audits</dd>
+          <dt>ESLint, Prettier</dt><dd>Linting and formatting</dd>
+          <dt>Docker Compose</dt><dd>PostgreSQL, web app and worker deployment</dd>
+        </dl>
+      </div>
+    </div>
+  </section>
+
+  <section aria-labelledby="map">
+    <h2 id="map">5. Code map</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Folder</th><th>Responsibility</th><th>Main technology</th></tr></thead>
+        <tbody>
+          <tr><td><code>apps/web</code></td><td>User interface, REST API, authentication, uploads</td><td>Next.js, React, Better Auth, Tailwind</td></tr>
+          <tr><td><code>apps/worker</code></td><td>Scan pipeline, reference processing, report generation, storage cleanup</td><td>Node.js, Playwright</td></tr>
+          <tr><td><code>packages/core</code></td><td>Shared types, configuration, scanner list, explanations and fix guides</td><td>TypeScript, Zod, Pino</td></tr>
+          <tr><td><code>packages/db</code></td><td>Database schema, migrations, repositories</td><td>Drizzle ORM, PostgreSQL</td></tr>
+          <tr><td><code>packages/crawler</code></td><td>Guarded HTTP fetching, link extraction, robots.txt, crawl</td><td>undici, Cheerio</td></tr>
+          <tr><td><code>packages/browser</code></td><td>Browser launch, page capture, in-page measurement scripts, PDF</td><td>Playwright, Chromium</td></tr>
+          <tr><td><code>packages/scanners</code></td><td>Seven QA scanners and the design and content comparisons</td><td>axe-core, culori, diff</td></tr>
+          <tr><td><code>packages/reference</code></td><td>Figma reading, guideline extraction, document parsing</td><td>Figma API, unpdf, mammoth</td></tr>
+          <tr><td><code>packages/ai</code></td><td>Issue grouping, AI interpretation, grounding</td><td>Gemini, Anthropic SDK</td></tr>
+          <tr><td><code>packages/reports</code></td><td>Report content and layout (HTML, Markdown, JSON)</td><td>TypeScript</td></tr>
+          <tr><td><code>packages/security</code></td><td>SSRF rules, upload and font validation, encryption</td><td>ipaddr.js</td></tr>
+          <tr><td><code>packages/storage</code></td><td>File storage for uploads, screenshots and reports</td><td>Node.js file system</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <footer>Taken from the QA Copilot repository on 23 October 2026 (package manifests, pipeline code and configuration). Versions: Next.js 16.3, React 19.3, Playwright 1.63, Drizzle 0.45, Zod 4.6, Node.js 22.</footer>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js"></script>
+<script>
+  mermaid.initialize({ startOnLoad: true, securityLevel: "strict", theme: window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "default" });
+</script>
+</body>
+</html>

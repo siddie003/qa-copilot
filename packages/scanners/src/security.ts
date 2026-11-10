@@ -19,6 +19,13 @@ import {
   truncate,
 } from "./util";
 
+/**
+ * Hosts serving "evergreen" loader scripts (tag managers, analytics, chat and form embeds) that
+ * the provider updates under an unchanged URL; Subresource Integrity cannot be used with them.
+ */
+const EVERGREEN_SCRIPT_HOSTS =
+  /(^|\.)(googletagmanager|google-analytics|hsforms|hs-scripts|hs-analytics|hsadspixel|hotjar|clarity|facebook|licdn|cloudflareinsights|stripe|recaptcha|gstatic|google)\.(com|net|ms)$/;
+
 const HSTS_MIN_SECONDS = 15_552_000; // 180 days
 
 interface PageRule {
@@ -456,6 +463,7 @@ export const securityScanner: Scanner = {
 
     // 4. HTML-level checks: insecure form targets, third-party resources without SRI, secrets.
     const sriMissing = new Map<string, { type: string; pageUrl: string; html: string }>();
+    const evergreen = new Set<string>();
     for (const p of pages) {
       const html = htmlById.get(p.id);
       if (!html) {
@@ -506,6 +514,11 @@ export const securityScanner: Scanner = {
           return;
         }
         if (!/^https?:/.test(target) || sameOrigin(target, url) || $(el).attr("integrity")) return;
+        // Loaders whose content changes under the same URL cannot carry an integrity hash.
+        if (EVERGREEN_SCRIPT_HOSTS.test(new URL(target).hostname)) {
+          evergreen.add(new URL(target).hostname);
+          return;
+        }
         if (!sriMissing.has(target))
           sriMissing.set(target, {
             type: el.tagName,
@@ -547,6 +560,10 @@ export const securityScanner: Scanner = {
         }
       }
     }
+    if (evergreen.size)
+      (checks.notes ??= []).push(
+        `Subresource Integrity not expected for ${[...evergreen].join(", ")}: these services change their script under the same URL, so an integrity hash would break it.`,
+      );
     for (const [target, info] of sriMissing) {
       findings.push({
         ruleId: "sri-missing",

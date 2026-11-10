@@ -10,4 +10,7 @@ export type DocxBlock =
 
 export function buildDocx(blocks: DocxBlock[]): Buffer;
 
-export function buildPdf(pages: Array<Array<{ text: string; size: number; gap?: number }>>): Buffer;
+export type PdfLine = { text: string; size: number; gap?: number };
+
+/** A page of lines, an image-only page (`{ image: true }`), or a blank page (`[]`). */
+export function buildPdf(pages: Array<PdfLine[] | { image: true }>): Buffer;

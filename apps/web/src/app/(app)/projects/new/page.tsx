@@ -13,7 +13,7 @@ export default function NewProjectPage() {
       <Breadcrumbs items={[{ label: "Projects", href: "/projects" }, { label: "New project" }]} />
       <PageHeader
         title="New project"
-        description="Set up the website, design reference, approved content and scan configuration."
+        description="Tell us which live website to test, then optionally add the design it should match and the text it should contain."
       />
       <ProjectWizard
         defaults={defaultScanDefaults({
@@ -22,6 +22,10 @@ export default function NewProjectPage() {
         })}
         scanners={SCANNER_KEYS.map((key) => ({ key, label: SCANNER_LABELS[key] }))}
         maxUploadMb={cfg.MAX_UPLOAD_MB}
+        integrations={{
+          figmaServerToken: Boolean(cfg.FIGMA_ACCESS_TOKEN),
+          aiConfigured: cfg.AI_PROVIDER !== "none",
+        }}
       />
     </>
   );

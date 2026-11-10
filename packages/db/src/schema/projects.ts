@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import {
   boolean,
+  customType,
   index,
   integer,
   jsonb,
@@ -71,9 +72,20 @@ export const referenceSource = pgTable(
     error: text(),
     /** File details (guideline documents) and the extraction report (what was read / skipped). */
     meta: jsonb().$type<Record<string, unknown>>(),
-    /** Set while a worker processes the reference (stale values are recovered on worker start). */
+    /** Heartbeat while a worker processes the reference (stale values are recovered). */
     processingStartedAt: timestamp({ withTimezone: true }),
     fetchedAt: timestamp({ withTimezone: true }),
+    /** When ready: completed | completed_with_warnings | partial. */
+    outcome: varchar({ length: 32 }),
+    /**
+     * Figma processing manifest: file identity and version, pages discovered/processed/failed
+     * with their frames, request counts, rate-limit details, warnings, timestamps.
+     */
+    manifest: jsonb().$type<Record<string, unknown>>(),
+    /** Resume state of an interrupted Figma read (pinned version, pages still to read). */
+    checkpoint: jsonb().$type<Record<string, unknown>>(),
+    attempts: integer().notNull().default(0),
+    cancelRequestedAt: timestamp({ withTimezone: true }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -121,11 +133,29 @@ export const contentDocument = pgTable(
     blockCount: integer().notNull().default(0),
     /** Extraction details: page count, warnings. */
     meta: jsonb().$type<Record<string, unknown>>(),
+    /** Heartbeat while a worker processes the document (stale values are recovered). */
     processingStartedAt: timestamp({ withTimezone: true }),
+    /** While parsing: extracting | indexing. */
+    stage: varchar({ length: 32 }),
+    /** When parsed: completed | completed_with_warnings | partial. */
+    outcome: varchar({ length: 32 }),
+    /** What was read: pages detected / with text / image-only / blank / failed / not processed. */
+    coverage: jsonb().$type<Record<string, unknown>>(),
+    /** Resume state of an interrupted or time-limited extraction (PDF: next page, collector). */
+    checkpoint: jsonb().$type<Record<string, unknown>>(),
+    /** Processing runs started (stale recovery stops re-queueing after a few). */
+    attempts: integer().notNull().default(0),
+    cancelRequestedAt: timestamp({ withTimezone: true }),
+    chunkCount: integer().notNull().default(0),
+    /** Extraction code version that produced the blocks (reuse/resume only within one version). */
+    extractorVersion: varchar({ length: 32 }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
-  (t) => [index("content_document_project_idx").on(t.projectId)],
+  (t) => [
+    index("content_document_project_idx").on(t.projectId),
+    index("content_document_project_sha_idx").on(t.projectId, t.sha256),
+  ],
 );
 
 export const contentBlock = pgTable(
@@ -146,6 +176,93 @@ export const contentBlock = pgTable(
     location: jsonb().$type<Record<string, unknown>>(),
   },
   (t) => [index("content_block_document_idx").on(t.documentId, t.order)],
+);
+
+const tsvector = customType<{ data: string }>({ dataType: () => "tsvector" });
+
+/**
+ * Retrieval units of a content document: consecutive blocks of one section, sized for AI
+ * requests, with their source location. `search` is a generated full-text index column
+ * ('simple' configuration: no stemming, works for any language).
+ */
+export const contentChunk = pgTable(
+  "content_chunk",
+  {
+    id: uuid().primaryKey().defaultRandom(),
+    documentId: uuid()
+      .notNull()
+      .references(() => contentDocument.id, { onDelete: "cascade" }),
+    projectId: uuid()
+      .notNull()
+      .references(() => project.id, { onDelete: "cascade" }),
+    chunkIndex: integer().notNull(),
+    text: text().notNull(),
+    /** Heading path of the section, outermost first, joined with " › ". */
+    headingText: text(),
+    pageHint: text(),
+    pageStart: integer(),
+    pageEnd: integer(),
+    /** First and last `content_block.order` in the chunk. */
+    blockStart: integer().notNull(),
+    blockEnd: integer().notNull(),
+    /** Offsets in the document text (block texts joined by newlines). */
+    charStart: integer().notNull(),
+    charEnd: integer().notNull(),
+    tokenEstimate: integer().notNull(),
+    contentHash: varchar({ length: 64 }).notNull(),
+    search: tsvector().generatedAlwaysAs(
+      sql`to_tsvector('simple'::regconfig, coalesce(heading_text, '') || ' ' || text)`,
+    ),
+  },
+  (t) => [
+    unique("content_chunk_document_index_uq").on(t.documentId, t.chunkIndex),
+    index("content_chunk_project_idx").on(t.projectId),
+    index("content_chunk_search_idx").using("gin", t.search),
+  ],
+);
+
+/**
+ * Pages of the project's website the user wants included in every scan (in addition to the
+ * crawl). `linkKey` is the duplicate-detection identity (host without www, path, sorted query).
+ */
+export const projectPageLink = pgTable(
+  "project_page_link",
+  {
+    id: uuid().primaryKey().defaultRandom(),
+    projectId: uuid()
+      .notNull()
+      .references(() => project.id, { onDelete: "cascade" }),
+    url: text().notNull(),
+    linkKey: text().notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [unique("project_page_link_project_key_uq").on(t.projectId, t.linkKey)],
+);
+
+/**
+ * Brand font files uploaded to a project. A row exists only after the file was validated and its
+ * font tables were read (names, weight, style in `metadata`); invalid files are rejected, not
+ * stored. Fonts are reference data for the Design Quality scanner; they are never served to
+ * visitors or injected into scanned pages.
+ */
+export const projectFont = pgTable(
+  "project_font",
+  {
+    id: uuid().primaryKey().defaultRandom(),
+    projectId: uuid()
+      .notNull()
+      .references(() => project.id, { onDelete: "cascade" }),
+    filename: varchar({ length: 255 }).notNull(),
+    format: varchar({ length: 8 }).notNull(),
+    mimeType: varchar({ length: 64 }).notNull(),
+    sizeBytes: integer().notNull(),
+    sha256: varchar({ length: 64 }).notNull(),
+    storageKey: text().notNull(),
+    /** What was read from the font file: family/style names, weight, italic, embedding bits. */
+    metadata: jsonb().$type<Record<string, unknown>>().notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [unique("project_font_project_sha_uq").on(t.projectId, t.sha256)],
 );
 
 /**

@@ -2,6 +2,7 @@
 
 import {
   AlertTriangle,
+  Ban,
   CheckCircle2,
   CircleDashed,
   HelpCircle,
@@ -20,11 +21,23 @@ const STATUS = {
   parsed: { label: "Parsed", Icon: CheckCircle2, cls: "text-success" },
   failed: { label: "Failed", Icon: XCircle, cls: "text-danger" },
   unavailable: { label: "Unavailable", Icon: HelpCircle, cls: "text-warning" },
+  cancelled: { label: "Cancelled", Icon: Ban, cls: "text-muted" },
+  partial: { label: "Partial", Icon: AlertTriangle, cls: "text-warning" },
+  ready_with_warnings: { label: "Ready with warnings", Icon: AlertTriangle, cls: "text-warning" },
 } as const;
 
-/** Processing state of a reference or document, with an icon so color is never the only signal. */
-export function ProcessingStatus({ status }: { status: string }) {
-  const s = STATUS[status as keyof typeof STATUS] ?? {
+/**
+ * Processing state of a reference or document, with an icon so color is never the only signal.
+ * A ready reference with an outcome shows it (Partial, Ready with warnings).
+ */
+export function ProcessingStatus({ status, outcome }: { status: string; outcome?: string | null }) {
+  const key =
+    status === "ready" && outcome === "partial"
+      ? "partial"
+      : status === "ready" && outcome === "completed_with_warnings"
+        ? "ready_with_warnings"
+        : status;
+  const s = STATUS[key as keyof typeof STATUS] ?? {
     label: status,
     Icon: AlertTriangle,
     cls: "text-muted",

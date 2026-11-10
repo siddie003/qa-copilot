@@ -4,6 +4,7 @@ import {
   authHeadersFor,
   COMPARISON_KEYS,
   errorFields,
+  LATE_SCANNERS,
   publicErrorMessage,
   SCANNER_KEYS,
   specSelectors,
@@ -217,6 +218,18 @@ export async function runScan(
 
   const runStep = async (stepKey: string, fn: (signal: AbortSignal) => Promise<StepOutcome>) => {
     if (fatal || stopped || currentStop() === "lost") return;
+    // The periodic heartbeat only runs every few seconds; checking before each step means a
+    // cancel requested near the end of a scan is honoured instead of being outrun by short steps.
+    if (!abort.signal.aborted) {
+      const { cancelRequested, lost } = await pipelineRepo.heartbeat(
+        rt.db,
+        scanRow.id,
+        scanRow.workerId,
+      );
+      if (lost) stop("lost");
+      else if (cancelRequested) stop("cancelled");
+      if (currentStop() === "lost") return;
+    }
     const slog = log.child({ step: stepKey });
     await pipelineRepo.updateStep(rt.db, scanRow.id, stepKey, { status: "running", started: true });
     const stepStart = Date.now();
@@ -316,10 +329,14 @@ export async function runScan(
       const env = scannerEnv(rt, state);
       let ctx: ScannerContext | null = null;
       for (const key of SCANNER_KEYS) {
-        if (!snapshot.scanners.includes(key)) continue;
+        if (!snapshot.scanners.includes(key) || LATE_SCANNERS.has(key)) continue;
         await runStep(key, async (signal) => {
           ctx ??= await buildScannerContext(env);
-          return runScannerStep(env, SCANNERS[key], withSignal(ctx, signal));
+          return runScannerStep(
+            env,
+            SCANNERS[key],
+            withSignal(ctx, signal, rt.config.SCAN_SCANNER_TIMEOUT_MS),
+          );
         });
       }
       // Reference comparisons run only when they were planned (the scan has references).
@@ -328,7 +345,23 @@ export async function runScan(
         if (!planned.has(key)) continue;
         await runStep(key, async (signal) => {
           ctx ??= await buildScannerContext(env);
-          return runScannerStep(env, COMPARISON_SCANNERS[key], withSignal(ctx, signal));
+          return runScannerStep(
+            env,
+            COMPARISON_SCANNERS[key],
+            withSignal(ctx, signal, rt.config.SCAN_SCANNER_TIMEOUT_MS),
+          );
+        });
+      }
+      // Scanners that read the comparisons' results (Design Quality) run after them.
+      for (const key of SCANNER_KEYS) {
+        if (!LATE_SCANNERS.has(key) || !planned.has(key)) continue;
+        await runStep(key, async (signal) => {
+          ctx ??= await buildScannerContext(env);
+          return runScannerStep(
+            env,
+            SCANNERS[key],
+            withSignal(ctx, signal, rt.config.SCAN_SCANNER_TIMEOUT_MS),
+          );
         });
       }
       // Issues: AI interpretation (when configured), then grounding and issue creation, which
@@ -412,9 +445,21 @@ export async function runScan(
   }
 }
 
-/** A scanner context whose live work (fetches, pages, loops) stops with the step's signal. */
-function withSignal(ctx: ScannerContext, signal: AbortSignal): ScannerContext {
-  return { ...ctx, signal, fetch: { ...ctx.fetch, signal } };
+/** Share of the step timeout after which scanners stop starting new pages (results are kept). */
+const SCANNER_BUDGET_SHARE = 0.8;
+
+/**
+ * A scanner context whose live work (fetches, pages, loops) stops with the step's signal, with
+ * the step's time budget (scanners that analyze page by page stop starting new pages after it and
+ * report the rest as not analyzed, instead of timing out and losing every result).
+ */
+function withSignal(ctx: ScannerContext, signal: AbortSignal, timeoutMs: number): ScannerContext {
+  return {
+    ...ctx,
+    signal,
+    fetch: { ...ctx.fetch, signal },
+    limits: { ...ctx.limits, deadline: Date.now() + timeoutMs * SCANNER_BUDGET_SHARE },
+  };
 }
 
 /**
@@ -445,7 +490,12 @@ async function loadReferences(
           id: d.id,
           filename: d.filename,
           targetPath: d.targetPath,
-          blocks: blocks.filter((b) => b.documentId === d.id),
+          // Only the blocks that existed when the scan started (a partial document may have
+          // been continued since); older snapshots without a count use every block.
+          blocks: blocks.filter(
+            (b) => b.documentId === d.id && (!d.blockCount || b.order < d.blockCount),
+          ),
+          coverageNote: d.coverageNote ?? null,
         })),
         missing: docs.filter((d) => !present.includes(d)).map((d) => d.filename),
       };
@@ -593,6 +643,11 @@ function scannerEnv(rt: ScanRuntime, s: ScanState): ScannerEnv {
     signal: s.abort.signal,
     pageTimeoutMs: s.snapshot.pageTimeoutMs,
     references: s.references,
+    // 0 = every page of the scan (its own page limit); the time budget still applies.
+    limits: {
+      accessibilityMaxPages: rt.config.SCAN_ACCESSIBILITY_MAX_PAGES || s.snapshot.maxPages,
+    },
+    approvedFonts: s.snapshot.approvedFonts ?? [],
     openContext: (viewport) => openContext(rt, s, viewport),
   };
 }
@@ -637,6 +692,8 @@ async function crawlStep(rt: ScanRuntime, s: ScanState, signal: AbortSignal): Pr
   const desktop = s.snapshot.viewports[0] ?? { name: "desktop", width: 1440, height: 900 };
   const { context } = await openContext(rt, s, desktop);
   let stored = 0;
+  // Outcome of every user-selected page link (reported, never silently dropped).
+  const userPages: Array<{ url: string; problem: string | null }> = [];
   try {
     const summary = await crawl(
       {
@@ -648,8 +705,22 @@ async function crawlStep(rt: ScanRuntime, s: ScanState, signal: AbortSignal): Pr
         robots: s.robots,
         signal,
         renderLinks: (url) => renderLinks(context, url, s.snapshot.pageTimeoutMs),
+        seedUrls: s.snapshot.pageLinks ?? [],
       },
       async (p) => {
+        if (p.seed)
+          userPages.push({
+            url: p.url,
+            problem: p.blockedByRobots
+              ? "disallowed by robots.txt"
+              : p.result?.error
+                ? `${p.result.error.code}: ${p.result.error.message}`
+                : (p.result?.status ?? 0) >= 400
+                  ? `HTTP ${p.result!.status}`
+                  : p.result && !p.isHtml
+                    ? `not an HTML page (${p.result.contentType ?? "unknown type"})`
+                    : null,
+          });
         const id = randomUUID();
         let rawHtmlKey: string | null = null;
         if (p.result?.body && p.isHtml) {
@@ -666,6 +737,7 @@ async function crawlStep(rt: ScanRuntime, s: ScanState, signal: AbortSignal): Pr
           redirectChain: r?.redirectChain.length ? r.redirectChain : null,
           depth: p.depth,
           discoveredFrom: p.discoveredFrom,
+          origin: p.seed ? "user" : "crawl",
           title: p.title,
           contentType: r?.contentType ?? null,
           responseHeaders: r ? r.headers : null,
@@ -681,8 +753,20 @@ async function crawlStep(rt: ScanRuntime, s: ScanState, signal: AbortSignal): Pr
       },
     );
     if (summary.cancelled) throw new CancelledError();
+    const linked = s.snapshot.pageLinks?.length ?? 0;
+    const failedUser = userPages.filter((u) => u.problem);
     const reason = [
       `${summary.pagesFetched} page${summary.pagesFetched === 1 ? "" : "s"} fetched`,
+      linked
+        ? `page links: ${userPages.length - failedUser.length} of ${linked} added by you loaded${
+            failedUser.length
+              ? ` (failed: ${failedUser
+                  .slice(0, 5)
+                  .map((u) => `${u.url} – ${u.problem}`)
+                  .join("; ")}${failedUser.length > 5 ? "; …" : ""})`
+              : ""
+          }`
+        : null,
       summary.failed ? `${summary.failed} returned an error or could not be loaded` : null,
       summary.blockedByRobots ? `${summary.blockedByRobots} skipped (robots.txt)` : null,
       summary.limitReached
@@ -741,6 +825,7 @@ async function captureStep(
     ? { selectors: specSelectors(s.references.designSpec.spec) }
     : null;
   const widest = Math.max(...s.snapshot.viewports.map((v) => v.width));
+  const quality = s.snapshot.scanners.includes("design_quality");
   // Viewports are captured in parallel, each in its own context (one page at a time per
   // context, so blocked-request evidence stays attributed to the right page).
   const lanes = await Promise.allSettled(
@@ -756,6 +841,7 @@ async function captureStep(
             proxy: browser.proxy,
             design,
             text: Boolean(s.references.content) && viewport.width === widest,
+            quality: quality ? { renderedFonts: viewport.width === widest } : null,
           });
           const base = `scans/${s.scanId}/pages/${p.id}/${viewport.name}`;
           const screenshotKey = r.screenshot
@@ -768,6 +854,9 @@ async function captureStep(
           const textContentKey = r.textContent
             ? (await rt.storage.put(`${base}.text.json`, JSON.stringify(r.textContent))).key
             : null;
+          const qualityKey = r.quality
+            ? (await rt.storage.put(`${base}.quality.json`, JSON.stringify(r.quality))).key
+            : null;
           await pipelineRepo.insertCapture(rt.db, {
             pageId: p.id,
             viewport: viewport.name,
@@ -777,6 +866,7 @@ async function captureStep(
             domSnapshotKey,
             computedStylesKey,
             textContentKey,
+            qualityKey,
             consoleMessages: [
               ...r.console.map((c) => ({ ...c })),
               ...r.pageErrors.map((e) => ({ type: "pageerror", text: e, location: null })),

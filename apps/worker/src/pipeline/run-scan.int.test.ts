@@ -550,6 +550,107 @@ describe.skipIf(!hasTestDb)("scan pipeline (preflight → crawl → capture → 
     expect(steps.links).toBeUndefined(); // scanners not selected get no pipeline step at all
   }, 120_000);
 
+  it("scans user-selected page links and runs Design Quality & Typography on them", async () => {
+    // /design-quality is not linked from any page of the fixture site (test data with known,
+    // intentional defects; see fixtures/demo-site/README.md).
+    const queued = await queueScan(site.url, {
+      scanners: ["design_quality"],
+      viewports: [
+        { name: "desktop", width: 1440, height: 900 },
+        { name: "mobile", width: 390, height: 844 },
+      ],
+      maxPages: 1,
+      maxDepth: 0,
+      pageLinks: [`${site.url}design-quality`, `${site.url}no-such-page`],
+      approvedFonts: [
+        {
+          id: "f1",
+          filename: "brand.woff2",
+          families: ["Brand Missing"],
+          weight: 400,
+          italic: false,
+        },
+      ],
+    });
+    await runScan(rt, (await pipelineRepo.claimNextScan(getDb(), "test-worker"))!);
+    const detail = await pipelineRepo.getScanDetail(getDb(), ownerId, queued.id);
+    expect(detail!.status).toBe("completed");
+    const steps = await stepsOf(queued.id);
+    // The page links were visited although the page limit is 1 and the depth 0; the missing one
+    // is reported with its real status, not dropped.
+    expect(steps.crawl!.statusReason).toMatch(
+      /page links: 1 of 2 added by you loaded \(failed: .*no-such-page – HTTP 404\)/,
+    );
+    const pages = await pagesOf(queued.id);
+    expect(pages.get("/")!.origin).toBe("crawl");
+    expect(pages.get("/design-quality")).toMatchObject({ origin: "user", httpStatus: 200 });
+    expect(pages.get("/no-such-page")).toMatchObject({ origin: "user", httpStatus: 404 });
+
+    const order = Object.values(steps)
+      .sort((a, b) => a.position - b.position)
+      .map((s) => s.stepKey);
+    expect(order).toEqual([
+      "preflight",
+      "crawl",
+      "capture",
+      "design",
+      "content",
+      "design_quality",
+      "ai",
+      "grounding",
+    ]);
+    const dq = steps.design_quality!;
+    expect(dq).toMatchObject({ status: "completed", toolVersion: "1.0.0" });
+    const parts = (dq.checks as { parts: Array<{ key: string; status: string }> }).parts;
+    expect(Object.fromEntries(parts.map((x) => [x.key, x.status]))).toEqual({
+      headings: "completed",
+      reference: "not_configured",
+      fonts: "completed",
+      images: "completed",
+      layout: "completed",
+      content: "not_configured",
+    });
+
+    const findings = await getDb()
+      .select()
+      .from(schema.rawFinding)
+      .where(eq(schema.rawFinding.scanId, queued.id));
+    const dqFindings = findings.filter((f) => f.scanner === "design_quality");
+    const byRule = (rule: string) => dqFindings.filter((f) => f.ruleId === rule);
+    expect(byRule("dq-heading-inconsistent")).toHaveLength(1);
+    expect(byRule("dq-heading-inconsistent")[0]!.actual).toMatch(
+      /28px, weight 700.*22px, weight 400/,
+    );
+    expect(byRule("dq-heading-hierarchy-inverted")[0]!.title).toBe(
+      "H3 headings are larger than H2 headings",
+    );
+    // Measured with Chromium's font engine: the missing web font fell back to Georgia.
+    const webfont = byRule("dq-webfont-not-rendered")[0]!;
+    expect(webfont).toMatchObject({
+      verdict: "confirmed",
+      expected: "Text rendered with “Brand Missing”",
+    });
+    expect(webfont.actual).toMatch(/Georgia/);
+    const upscaled = byRule("dq-image-upscaled");
+    expect(upscaled.map((f) => f.actual).sort()).toEqual([
+      "40×40px source, enlarged 4×",
+      "600×200px source, enlarged 2×",
+    ]);
+    expect(byRule("dq-image-distorted")[0]!.title).toBe(
+      "Image is stretched: aspect ratio changed by 33%",
+    );
+    expect(byRule("dq-alignment-near-miss")[0]!.actual).toBe("3px offset");
+    expect(byRule("dq-spacing-inconsistent")[0]!.actual).toBe("16px, 28px, 16px");
+    // The uploaded "brand font" is the one that failed: reported as declared but not rendered.
+    const cmp = (dq.checks as { comparison: { items: Array<{ key: string; verdict: string }> } })
+      .comparison;
+    expect(cmp.items.find((i) => i.key === "font.f1")!.verdict).toBe("confirmed_mismatch");
+    // Every finding has evidence and became part of an issue.
+    expect(dqFindings.every((f) => f.fingerprint.length === 64)).toBe(true);
+    const issues = await scanIssuesRepo.listScanIssues(getDb(), ownerId, queued.id);
+    expect(issues!.issues.filter((i) => i.category === "design_quality").length).toBeGreaterThan(5);
+  }, 180_000);
+
   it("fails clearly when the website is unreachable and skips the rest", async () => {
     const queued = await queueScan(`http://localhost:${site.port}/`);
     await site.close();

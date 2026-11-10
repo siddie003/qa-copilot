@@ -138,6 +138,30 @@ export default async function SettingsPage() {
                   ? `${summary.aiProvider} · ${summary.aiModel}${summary.aiEffort ? ` · effort ${summary.aiEffort}` : ""}${summary.aiRefusalFallback ? " · refusal fallback on" : ""}`
                   : "Not configured (issues use the scanners' wording)"}
               </Row>
+              {summary.aiConfigured && (
+                <>
+                  <Row label="AI request limits">
+                    {summary.aiLimits.requestsPerMinute
+                      ? `${summary.aiLimits.requestsPerMinute} requests/min`
+                      : "no request pacing"}{" "}
+                    ·{" "}
+                    {summary.aiLimits.tokensPerMinute
+                      ? `${summary.aiLimits.tokensPerMinute} tokens/min`
+                      : "no token pacing"}{" "}
+                    · {summary.aiLimits.maxInputTokens} input tokens per request · up to{" "}
+                    {summary.aiLimits.maxIssuesPerScan} issues per scan ·{" "}
+                    {summary.aiLimits.maxRetries} retries
+                  </Row>
+                  {summary.aiDataNotice && (
+                    <Row label="AI data use">
+                      <span className="block max-w-xl text-left sm:text-right">
+                        {summary.aiDataNotice} Check the configuration with{" "}
+                        <code className="font-mono text-xs">npm run ai:check</code>.
+                      </span>
+                    </Row>
+                  )}
+                </>
+              )}
               <Row label="Figma API">
                 {summary.figmaConfigured
                   ? "Token configured"

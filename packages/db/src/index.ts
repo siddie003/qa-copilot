@@ -15,6 +15,8 @@ export * as designSpecsRepo from "./repositories/design-specs";
 export * as contentRepo from "./repositories/content";
 export * as scanIssuesRepo from "./repositories/scan-issues";
 export * as comparisonsRepo from "./repositories/comparisons";
+export * as pageLinksRepo from "./repositories/page-links";
+export * as fontsRepo from "./repositories/fonts";
 export type { IssueCounts, LastScanSummary, ProjectSummary } from "./repositories/projects";
 export type { DashboardSummary } from "./repositories/dashboard";
 export type { ScanListItem, ScannerRunRow } from "./repositories/scans";
@@ -27,4 +29,5 @@ export type {
 } from "./repositories/issues";
 export type { CreateReportResult, ReportListItem } from "./repositories/reports";
 export type { PageListItem } from "./repositories/pages";
+export type { ProjectFontRow } from "./repositories/fonts";
 export type { HistoryScan } from "./repositories/comparisons";

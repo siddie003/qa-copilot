@@ -62,6 +62,10 @@ const routes = {
   document: await import("@/app/api/v1/content-documents/[id]/route"),
   documentBlocks: await import("@/app/api/v1/content-documents/[id]/blocks/route"),
   documentRetry: await import("@/app/api/v1/content-documents/[id]/retry/route"),
+  // Routes added in Phases 13–14.
+  documentCancel: await import("@/app/api/v1/content-documents/[id]/cancel/route"),
+  contentSearch: await import("@/app/api/v1/projects/[id]/content-search/route"),
+  referenceCancel: await import("@/app/api/v1/projects/[id]/references/[refId]/cancel/route"),
   artifacts: await import("@/app/api/v1/artifacts/[...key]/route"),
   dashboard: await import("@/app/api/v1/dashboard/summary/route"),
 };
@@ -377,6 +381,30 @@ describe.skipIf(!hasTestDb)("API security (Phase 10, real database)", () => {
           ),
       ],
       [
+        "POST cancel reference",
+        () =>
+          routes.referenceCancel.POST(
+            req(`/api/v1/projects/${projectId}/references/${referenceId}/cancel`, bob, "POST"),
+            p({ id: projectId, refId: referenceId }),
+          ),
+      ],
+      [
+        "POST cancel reference via own project",
+        () =>
+          routes.referenceCancel.POST(
+            req(`/api/v1/projects/${bobProjectId}/references/${referenceId}/cancel`, bob, "POST"),
+            p({ id: bobProjectId, refId: referenceId }),
+          ),
+      ],
+      [
+        "GET content search",
+        () =>
+          routes.contentSearch.GET(
+            req(`/api/v1/projects/${projectId}/content-search?q=hello`, bob),
+            p(id),
+          ),
+      ],
+      [
         "GET scan auth",
         () => routes.scanAuth.GET(req(`/api/v1/projects/${projectId}/scan-auth`, bob), p(id)),
       ],
@@ -527,6 +555,14 @@ describe.skipIf(!hasTestDb)("API security (Phase 10, real database)", () => {
           ),
       ],
       [
+        "POST document cancel",
+        () =>
+          routes.documentCancel.POST(
+            req(`/api/v1/content-documents/${documentId}/cancel`, bob, "POST"),
+            p({ id: documentId }),
+          ),
+      ],
+      [
         "GET artifact",
         () =>
           routes.artifacts.GET(
@@ -590,13 +626,15 @@ describe.skipIf(!hasTestDb)("API security (Phase 10, real database)", () => {
       .select()
       .from(schema.contentDocument)
       .where(eq(schema.contentDocument.projectId, projectId));
-    expect(docs.map((d) => [d.id, d.targetPath])).toEqual([[documentId, null]]);
-    expect(
-      await getDb()
-        .select()
-        .from(schema.referenceSource)
-        .where(eq(schema.referenceSource.id, referenceId)),
-    ).toHaveLength(1);
+    expect(docs.map((d) => [d.id, d.targetPath, d.cancelRequestedAt])).toEqual([
+      [documentId, null, null],
+    ]);
+    const refs = await getDb()
+      .select()
+      .from(schema.referenceSource)
+      .where(eq(schema.referenceSource.id, referenceId));
+    expect(refs).toHaveLength(1);
+    expect(refs[0]!.cancelRequestedAt).toBeNull();
     expect(
       await getDb()
         .select()

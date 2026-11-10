@@ -98,8 +98,10 @@ export function buildDocx(blocks) {
 const pdfText = (s) => s.replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
 
 /**
- * Builds a PDF with Helvetica text. pages: Array<Array<{ text, size }>>; lines are laid out
- * top-down with a gap proportional to the font size. Text must be Latin-1.
+ * Builds a PDF with Helvetica text. pages: Array<Array<{ text, size }> | { image: true }>; lines
+ * are laid out top-down with a gap proportional to the font size. `{ image: true }` is a page
+ * that only paints an image (like a scanned page, no text layer); an empty array is a blank page.
+ * Text must be Latin-1.
  */
 export function buildPdf(pages) {
   const objects = [];
@@ -112,14 +114,25 @@ export function buildPdf(pages) {
   const fontId = add(
     "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
   );
+  let imageId = null;
   const pageIds = [];
-  for (const lines of pages) {
-    let y = 800;
+  for (const page of pages) {
     const ops = [];
-    for (const l of lines) {
-      if (l.gap) y -= l.gap;
-      y -= l.size * 1.4;
-      ops.push(`BT /F1 ${l.size} Tf 72 ${y.toFixed(1)} Td (${pdfText(l.text)}) Tj ET`);
+    let resources = `<< /Font << /F1 ${fontId} 0 R >> >>`;
+    if (!Array.isArray(page) && page.image) {
+      // A 2×2 grayscale image scaled over the page.
+      imageId ??= add(
+        "<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 4 >>\nstream\n\u0000\u00ff\u00ff\u0000\nendstream",
+      );
+      resources = `<< /XObject << /Im1 ${imageId} 0 R >> >>`;
+      ops.push("q 468 0 0 600 72 120 cm /Im1 Do Q");
+    } else {
+      let y = 800;
+      for (const l of page) {
+        if (l.gap) y -= l.gap;
+        y -= l.size * 1.4;
+        ops.push(`BT /F1 ${l.size} Tf 72 ${y.toFixed(1)} Td (${pdfText(l.text)}) Tj ET`);
+      }
     }
     const stream = ops.join("\n");
     const contentId = add(
@@ -127,7 +140,7 @@ export function buildPdf(pages) {
     );
     pageIds.push(
       add(
-        `<< /Type /Page /Parent ${pagesId} 0 R /MediaBox [0 0 612 842] /Resources << /Font << /F1 ${fontId} 0 R >> >> /Contents ${contentId} 0 R >>`,
+        `<< /Type /Page /Parent ${pagesId} 0 R /MediaBox [0 0 612 842] /Resources ${resources} /Contents ${contentId} 0 R >>`,
       ),
     );
   }

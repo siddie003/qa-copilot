@@ -33,7 +33,8 @@ export const GET = authedHandler<Params>(
         "cache-control": "private, max-age=3600",
         "x-content-type-options": "nosniff",
         // Artifacts are data: never executed or framed as part of the application.
-        "content-security-policy": "default-src 'none'; img-src 'self'; sandbox",
+        "content-security-policy":
+          "default-src 'none'; img-src 'self'; sandbox; frame-ancestors 'none'",
         "content-disposition": "inline",
       },
     });

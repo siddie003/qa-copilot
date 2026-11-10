@@ -1,0 +1,552 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>QA Copilot Capacity Review</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  /* Layout: one reading column (72rem) of numbered report sections; tables scroll inside their own box; each limit carries a provenance tag (confirmed / observed / estimate / our app). */
+  :root {
+    --bg: #f6f7f9; --surface: #ffffff; --fg: #17202b; --muted: #5a6677; --line: #d9dee6;
+    --accent: #1f5fae; --accent-soft: #e6eef9;
+    --confirmed: #1d7a4f; --confirmed-bg: #e3f4ea;
+    --observed: #7a4fb0; --observed-bg: #efe7f8;
+    --estimate: #a35b00; --estimate-bg: #fbeedb;
+    --app: #1f5fae; --app-bg: #e6eef9;
+    --risk: #b3261e; --risk-bg: #fbe4e2;
+    --font-body: "Public Sans", "Segoe UI", system-ui, sans-serif;
+    --font-mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0f141b; --surface: #161d27; --fg: #e5eaf1; --muted: #9aa6b6; --line: #2a3441;
+      --accent: #7fb0f0; --accent-soft: #1b2a3e;
+      --confirmed: #5cc493; --confirmed-bg: #143326; --observed: #c4a3ee; --observed-bg: #2a1f3a;
+      --estimate: #e5a54b; --estimate-bg: #3a2a12; --app: #7fb0f0; --app-bg: #1b2a3e;
+      --risk: #f08a80; --risk-bg: #3a1a18; color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0f141b; --surface: #161d27; --fg: #e5eaf1; --muted: #9aa6b6; --line: #2a3441;
+    --accent: #7fb0f0; --accent-soft: #1b2a3e;
+    --confirmed: #5cc493; --confirmed-bg: #143326; --observed: #c4a3ee; --observed-bg: #2a1f3a;
+    --estimate: #e5a54b; --estimate-bg: #3a2a12; --app: #7fb0f0; --app-bg: #1b2a3e;
+    --risk: #f08a80; --risk-bg: #3a1a18; color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 15px; line-height: 1.6;
+    padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+    padding-block: 40px 72px;
+  }
+  .page { max-width: 72rem; margin: 0 auto; display: grid; gap: 56px; }
+  header { display: grid; gap: 12px; }
+  .eyebrow { font-family: var(--font-mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+  h1 { font-size: clamp(28px, 4vw, 40px); line-height: 1.15; margin: 0; text-wrap: balance; }
+  h2 { font-size: 23px; margin: 0; text-wrap: balance; }
+  h3 { font-size: 16px; margin: 0; }
+  p { margin: 0; max-width: 70ch; }
+  .lead { color: var(--muted); font-size: 16px; }
+  section { display: grid; gap: 16px; min-width: 0; }
+  ul.tight { margin: 0; padding-left: 20px; display: grid; gap: 6px; max-width: 72ch; }
+  .tag { display: inline-block; font-family: var(--font-mono); font-size: 11px; padding: 1px 7px; border-radius: 999px; white-space: nowrap; font-weight: 500; }
+  .t-confirmed { color: var(--confirmed); background: var(--confirmed-bg); }
+  .t-observed { color: var(--observed); background: var(--observed-bg); }
+  .t-estimate { color: var(--estimate); background: var(--estimate-bg); }
+  .t-app { color: var(--app); background: var(--app-bg); }
+  .t-risk { color: var(--risk); background: var(--risk-bg); }
+  .legend { display: flex; flex-wrap: wrap; gap: 10px 18px; font-size: 13px; color: var(--muted); align-items: center; }
+  .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+  .point { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; display: grid; gap: 6px; align-content: start; }
+  .point p { color: var(--muted); font-size: 14px; }
+  .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; min-width: 760px; font-size: 14px; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); font-weight: 600; background: var(--accent-soft); white-space: nowrap; }
+  tr:last-child td { border-bottom: 0; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  code { font-family: var(--font-mono); font-size: 12.5px; }
+  .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 18px; overflow-x: auto; min-width: 0; }
+  .panel pre.mermaid { margin: 0; min-width: 720px; display: flex; justify-content: center; background: transparent; }
+  .explain { border-left: 3px solid var(--accent); padding: 2px 0 2px 14px; display: grid; gap: 6px; }
+  .explain p { color: var(--muted); }
+  .scen { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; display: grid; gap: 8px; align-content: start; min-width: 0; }
+  .card dl { margin: 0; display: grid; grid-template-columns: 112px 1fr; gap: 5px 12px; font-size: 14px; }
+  .card dt { color: var(--muted); }
+  .card dd { margin: 0; min-width: 0; }
+  .callout { background: var(--accent-soft); border-radius: 10px; padding: 14px 18px; display: grid; gap: 6px; }
+  .callout p { max-width: none; }
+  .road { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; }
+  .road ol { margin: 0; padding-left: 20px; display: grid; gap: 6px; font-size: 14px; }
+  .sources { font-size: 13px; color: var(--muted); display: grid; gap: 4px; }
+  .sources a { color: var(--accent); word-break: break-word; }
+  footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line); padding-top: 16px; }
+  @media (max-width: 520px) { .card dl { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+
+<div class="page">
+  <header>
+    <div class="eyebrow">QA Copilot · capacity, limits and cost · 24 October 2026</div>
+    <h1>Where QA Copilot's capacity limits come from, and how to raise them</h1>
+    <p class="lead">An analysis of Figma, the AI layer and QA Copilot's own processing limits, based on the current code, measurements from the Ascendion scans (22 and 24 October 2026) and the providers' official pages read on 24 October 2026.</p>
+    <div class="legend">
+      <span><span class="tag t-confirmed">confirmed</span> official documentation</span>
+      <span><span class="tag t-observed">observed</span> measured on our installation</span>
+      <span><span class="tag t-estimate">estimate</span> derived, assumptions stated</span>
+      <span><span class="tag t-app">our app</span> a limit set in QA Copilot's code or configuration</span>
+    </div>
+  </header>
+
+  <!-- 1 -->
+  <section aria-labelledby="s1">
+    <h2 id="s1">1. Executive summary</h2>
+    <div class="summary">
+      <div class="point"><h3>The AI context window is not the bottleneck</h3><p>QA Copilot never sends a whole website, Figma file or screenshot to the AI. It sends grouped issue evidence as text, at most about 20,000 input tokens per request. The binding AI limits are requests per minute and per day, and on the free tier, Google's data-use terms.</p></div>
+      <div class="point"><h3>Figma's limit depends on the seat in the file's plan</h3><p>With a View/Collab seat, file reads are capped at "up to 20 per month" on every plan. The limit belongs to the plan where the file lives. Buying our own Figma plan does not raise the limit for a client's file (such as Ascendion's).</p></div>
+      <div class="point"><h3>Most of the analysis does not use AI at all</h3><p>Seven deterministic scanners produce the findings. AI only rewrites issue text, and that text is checked against the evidence. When AI is unavailable, the scan still completes with the scanners' wording.</p></div>
+      <div class="point"><h3>AI cost per scan is cents</h3><p>The 24 October scan (17 pages, 75 issues) used about 130,000 input and 46,000 output tokens. On paid tiers that is about $0.04 (Claude Haiku 5.5) to $0.72 (Claude Sonnet 5.5) per scan. Gemini 3.6 Flash is about $0.27.</p></div>
+      <div class="point"><h3>Our own code sets the hard ceilings</h3><p>At most 500 pages per scan, 300 checked links, 200 AI-explained issues, one Figma link per project and one merged design reference. These are design choices, not subscription limits, and only code changes raise them.</p></div>
+      <div class="point"><h3>Spend on architecture before subscriptions</h3><p>The highest-value next steps are code: reuse AI text for issues already seen, a provider fallback chain, per-template design references, scan resume and a usage/cost dashboard. Paid AI is only needed for client data (Google's free-tier terms) and higher daily volume.</p></div>
+    </div>
+  </section>
+
+  <!-- 2 -->
+  <section aria-labelledby="s2">
+    <h2 id="s2">2. Figma capacity and limitations</h2>
+    <p>Figma has three kinds of limit: what one file can hold, how often the API may be called, and what a subscription plan allows. On top of these, QA Copilot adds its own processing rules. These are often confused, so the table separates them.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Limit</th><th>Value</th><th>Type</th><th>Source</th><th>What it means for QA Copilot</th></tr></thead>
+        <tbody>
+          <tr><td>Pages per file</td><td>Starter team files: max 3 pages. Professional, Organization: as many as needed</td><td><span class="tag t-confirmed">confirmed</span> plan-dependent</td><td>Figma Help Center, "Create and manage pages"</td><td>The Ascendion_Dev file has 53 pages, so it can only exist on a paid plan.</td></tr>
+          <tr><td>File size / complexity</td><td>Figma has no fixed page, frame or layer count. A file is limited by the browser tab's memory (Figma staff describe about 2 GB).</td><td><span class="tag t-observed">community / staff</span> soft limit</td><td>Figma forum (staff reply)</td><td>Large files open slowly in Figma, and the API can return very large responses (whole Ascendion file at <code>depth=3</code>: 2.5 MB of structure only).</td></tr>
+          <tr><td>API: file content (Tier 1: GET file, GET nodes, GET image)</td><td>View/Collab seat: <b>up to 20 per month</b> on every plan (may be lower under load). Dev/Full seat: 10/min (Starter), 15/min (Professional), 20/min (Organization); Enterprise not clearly listed</td><td><span class="tag t-confirmed">confirmed</span> hard, seat- and plan-dependent</td><td>Figma REST API rate limits (in effect since 17 Nov 2025)</td><td>The scarcest resource. Each Figma extraction costs 1 Tier 1 request.</td></tr>
+          <tr><td>API: metadata (Tier 3: GET file meta, styles, components)</td><td>View/Collab up to 10/min. Dev/Full 50, 100 or 150/min by plan</td><td><span class="tag t-confirmed">confirmed</span></td><td>Same page</td><td>QA Copilot uses <code>meta</code> to see whether the file changed. An unchanged file costs no Tier 1 request.</td></tr>
+          <tr><td>Who the limit belongs to</td><td>Personal access token: per user, <b>per plan of the file</b>. "A file in a Starter plan gets Starter limits even if the user has an Enterprise Full seat."</td><td><span class="tag t-confirmed">confirmed</span></td><td>Same page</td><td>For a client file, only a Dev/Full seat <b>in the client's plan</b> raises the limit.</td></tr>
+          <tr><td>Rate-limit response</td><td>HTTP 429 with <code>Retry-After</code>, <code>X-Figma-Plan-Tier</code>, <code>X-Figma-Rate-Limit-Type</code> (low/high), <code>X-Figma-Upgrade-Link</code>. Leaky-bucket algorithm; Figma may change limits</td><td><span class="tag t-confirmed">confirmed</span></td><td>Same page</td><td>On 22 Oct, Figma answered <code>plan: org</code>, type <code>low</code>, Retry-After 159,075 s (44 h). <span class="tag t-observed">observed</span></td></tr>
+          <tr><td>Pagination</td><td>The file and nodes endpoints do not paginate. Responses are limited with <code>ids</code> and <code>depth</code></td><td><span class="tag t-confirmed">confirmed</span></td><td>Figma file endpoints</td><td>QA Copilot splits large files into page batches itself.</td></tr>
+          <tr><td>Token scopes</td><td>Our token has <code>file_content:read</code> + <code>file_metadata:read</code>. Styles/components endpoints need <code>files:read</code> or <code>library_content:read</code></td><td><span class="tag t-observed">observed</span></td><td>HTTP 403 on 22 Oct</td><td>Published-styles listings (Tier 3) are not available with the current token.</td></tr>
+          <tr><td>Figma links per project</td><td>1 file. With <code>node-id</code>: that one frame. Without it: the whole file</td><td><span class="tag t-app">our app</span></td><td><code>parseFigmaUrl</code></td><td>One URL can cover an entire website design (whole-file read), but see "merged reference" below.</td></tr>
+          <tr><td>Response size per request</td><td><code>FIGMA_MAX_RESPONSE_MB</code> = 50 (1 to 500)</td><td><span class="tag t-app">our app</span></td><td>config</td><td>A larger whole file is read page by page: page list plus batches of <code>FIGMA_PAGES_PER_REQUEST</code> = 10 pages. A batch that is too large is split in halves.</td></tr>
+          <tr><td>Retries</td><td>Up to 3 retries; waits up to 60 s on <code>Retry-After</code>. A longer wait stops the read with a checkpoint</td><td><span class="tag t-app">our app</span></td><td>config</td><td>A monthly cap does not lose work. "Continue reading" fetches only the missing pages.</td></tr>
+          <tr><td>What is extracted</td><td>Text styles (H1–H6, body, link, button), color styles, a Button component's Primary variant, a "Container" frame</td><td><span class="tag t-app">our app</span></td><td><code>normalize.ts</code></td><td>Components, spacing, layout grids and Figma Variables are not used. Variables need the Enterprise-only Variables API.</td></tr>
+          <tr><td>Merged design reference</td><td>All extracted values go into <b>one</b> reference: one value per role, applied to every scanned page</td><td><span class="tag t-app">our app</span> accuracy limit</td><td><code>upsertDraftFromExtraction</code></td><td>A whole-website Figma file mixes templates (home H1 vs article H1). See the recommendation below.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout">
+      <h3>Is one Figma URL for the whole website practical?</h3>
+      <p><b>For reading: yes.</b> QA Copilot can read a 53-page file through one URL, in batches of 10 pages, with resume. That costs about 7 Tier 1 requests the first time and none while the file is unchanged.</p>
+      <p><b>For accurate comparison: no, not today.</b> The tool keeps one value per role, so every website page is compared with one blended design. The accurate setup is <b>one project per template</b>, each with one frame link (for example T16 → articles, T1 → home), or the per-template design references proposed in section 8.</p>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Plan (Figma pricing page)</th><th>Full seat</th><th>Dev seat</th><th>Collab</th><th>View</th><th>Tier 1 API with a Dev/Full seat</th><th>Tier 1 with View/Collab</th></tr></thead>
+        <tbody>
+          <tr><td>Starter</td><td>Free</td><td>–</td><td>–</td><td>–</td><td class="num">10/min</td><td class="num">≤20/month</td></tr>
+          <tr><td>Professional</td><td>$16/mo</td><td>$12/mo</td><td>$3/mo</td><td>free</td><td class="num">15/min</td><td class="num">≤20/month</td></tr>
+          <tr><td>Organization (annual)</td><td>$55/mo</td><td>$25/mo</td><td>$5/mo</td><td>free</td><td class="num">20/min</td><td class="num">≤20/month</td></tr>
+          <tr><td>Enterprise (annual)</td><td>$90/mo</td><td>$35/mo</td><td>$5/mo</td><td>free</td><td>not clearly listed</td><td class="num">≤20/month</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="lead" style="font-size:14px">Prices in USD per seat per month, read from figma.com/pricing on 24 Oct 2026. The pricing page states no numeric REST API limits ("Rate limits vary by seat, plan, and API endpoint"); the API column comes from the rate-limits page. <span class="tag t-confirmed">confirmed</span></p>
+  </section>
+
+  <!-- 3 -->
+  <section aria-labelledby="s3">
+    <h2 id="s3">3. AI model capacity and limitations</h2>
+    <p>Our current setup: Google Gemini (<code>gemini-3.6-flash</code>) on the <b>free tier</b>. It uses 2 parallel requests, paced to 5 per minute, with at most 16,000 output tokens and about 20,000 input tokens per request. QA Copilot also supports Anthropic, any OpenAI-compatible API and Groq, so switching provider is a configuration change.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Provider / model</th><th class="num">Input $/1M</th><th class="num">Output $/1M</th><th>Batch</th><th>Context</th><th>Rate limits</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td><b>Gemini 3.6 Flash</b> (current)</td><td class="num">0.75 → 1.50</td><td class="num">3.75 → 7.50</td><td>50% off</td><td>1M class <span class="tag t-confirmed">confirmed</span> (3.8 Flash: 1,048,576 in / 65,536 out)</td><td>Free tier: 5 RPM <span class="tag t-observed">observed</span>; per-day limit unpublished, about 20/day <span class="tag t-observed">observed</span>. RPM, TPM and RPD are per project; RPD resets at midnight Pacific</td><td>Prices double on 1 Jan 2027. Free-tier content is used to improve Google products. EEA, CH and UK apps must use paid.</td></tr>
+          <tr><td>Gemini 3.1 Flash-Lite</td><td class="num">0.25</td><td class="num">1.50</td><td>50% off</td><td>large</td><td>Paid tiers 1–3 by cumulative spend ($0 / $100 / $1,000)</td><td>Cheaper option for simple rule groups.</td></tr>
+          <tr><td>Gemini 3.1 Pro Preview</td><td class="num">2.00 (≤200k)</td><td class="num">12.00</td><td>50% off</td><td>large</td><td>No free tier</td><td>Strong reasoning; preview.</td></tr>
+          <tr><td><b>Claude Haiku 5.5</b></td><td class="num">0.10 (≤100k)</td><td class="num">0.50</td><td>50% off</td><td>see note</td><td>Start tier: 1,000 RPM, 2M input TPM, 400k output TPM. Monthly spend cap $500 (Start) / $1,000 (Build) / $200,000 (Scale)</td><td>The cheapest capable paid option. Cached input does not count toward input TPM.</td></tr>
+          <tr><td>Claude Sonnet 5.5</td><td class="num">2.00</td><td class="num">10.00</td><td>50% off</td><td>1M at standard price</td><td>Same tier table as Haiku 5.5</td><td>For complex design/content reasoning.</td></tr>
+          <tr><td>Claude Opus 5.5</td><td class="num">4.00</td><td class="num">20.00</td><td>50% off</td><td>1M at standard price</td><td>Same tier table</td><td>Not needed for issue explanations.</td></tr>
+          <tr><td>OpenAI gpt-6-luna</td><td class="num">0.10</td><td class="num">0.50</td><td>50% off</td><td>–</td><td>Per account tier (not read)</td><td>Via the OpenAI-compatible adapter.</td></tr>
+          <tr><td>OpenAI gpt-6.1-sol</td><td class="num">2.00</td><td class="num">10.00</td><td>50% off</td><td>–</td><td>Per account tier (not read)</td><td>–</td></tr>
+          <tr><td>Groq openai/gpt-oss-120b</td><td class="num">0.15</td><td class="num">0.60</td><td>–</td><td>131,072 / 65,536 out</td><td>Developer plan base: 30 RPM, 1K RPD, <b>8K TPM</b>, 200K TPD. Free plan not readable</td><td>8K TPM is smaller than one of our requests today (on average about 11k in + 4k out on 24 Oct), so requests must be made smaller.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="lead" style="font-size:14px">All prices are USD per 1M tokens, standard tier, read on 24 Oct 2026. Gemini 3.6 Flash shows "current → from 1 Jan 2027". <span class="tag t-confirmed">confirmed</span> unless tagged otherwise.</p>
+
+    <h3>What drives AI usage in QA Copilot</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Input</th><th>Sent to AI?</th><th>Effect on AI usage</th></tr></thead>
+        <tbody>
+          <tr><td>Number of website pages</td><td>No (indirectly)</td><td>More pages mean more findings, but findings are grouped into issues by rule. The 24 Oct scan turned 846 findings into 75 issues, so usage grows much slower than page count.</td></tr>
+          <tr><td>Figma design</td><td>No</td><td>Read by deterministic code into design values. Its size affects Figma requests, not AI.</td></tr>
+          <tr><td>Screenshots</td><td>No</td><td>Stored as evidence (about 66 MB per 17-page scan) and never sent to AI.</td></tr>
+          <tr><td>Brand guidelines</td><td>Optional, capped</td><td>A deterministic reader extracts values. An AI pass over guideline text is capped at 300 lines / 40,000 characters.</td></tr>
+          <tr><td>Font files</td><td>No</td><td>Validated by code.</td></tr>
+          <tr><td>Content documents</td><td>Only relevant sections</td><td>Split into sections of about 600 tokens. Only sections matching an issue are attached, each cut to 800 characters.</td></tr>
+          <tr><td>Issue evidence</td><td>Yes</td><td>Up to 10 issue groups per request, 5 findings per group, values trimmed, about 20,000 input tokens per request, 200 issues per scan.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>What happens at a limit</h3>
+    <ul class="tight">
+      <li><b>Input too large for one request:</b> batches are cut to fit before sending. An issue that still does not fit keeps the scanners' wording, with the reason recorded. <span class="tag t-app">our app</span></li>
+      <li><b>Per-minute limit (HTTP 429):</b> client-side pacing waits for a free slot. The <code>Retry-After</code> wait is honoured up to 60 s, with 3 retries. <span class="tag t-app">our app</span></li>
+      <li><b>Daily quota used up:</b> detected from Google's structured quota ids. The remaining issues keep the scanners' wording, and the AI step says so. Nothing is lost, but there is no automatic switch to another provider. <span class="tag t-app">our app</span></li>
+      <li><b>Provider overloaded or down (HTTP 503, timeouts):</b> retried. On 24 Oct, 3 of 12 requests still failed with HTTP 503 "high demand", so 19 issues used the scanners' wording. <span class="tag t-observed">observed</span></li>
+      <li><b>AI says something the evidence does not support:</b> the grounding check replaces or rejects it. On 24 Oct, 843 of 867 checks passed and 16 issues had unsupported parts replaced. <span class="tag t-observed">observed</span></li>
+    </ul>
+  </section>
+
+  <!-- 4 -->
+  <section aria-labelledby="s4">
+    <h2 id="s4">4. Architecture diagrams and failure / recovery flows</h2>
+
+    <h3>4a. End-to-end workflow with the limit at each stage</h3>
+    <div class="panel">
+<pre class="mermaid">
+flowchart LR
+  U["Inputs<br/>website URL, Figma URL,<br/>guidelines, fonts, documents,<br/>page links"] --> Q[("Job queue<br/>PostgreSQL<br/>1 scan per worker")]
+  subgraph REF["References (before the scan)"]
+    direction TB
+    F1["Figma API<br/>Tier 1: 20/month (view seat)<br/>or 10–20/min (dev seat)"] --> F2["Extraction<br/>50 MB per response,<br/>10 pages per batch"]
+    F2 --> F3["Normalization<br/>text + color styles,<br/>button, container"]
+    G1["Guidelines + documents<br/>20 MB upload,<br/>50,000 blocks"] --> F3
+    F3 --> F4{"Draft confirmed<br/>by a person?"}
+  end
+  U --> F1
+  U --> G1
+  F4 -- yes --> Q
+  Q --> C1["Crawl<br/>max 500 pages, depth 10"]
+  C1 --> C2["Browser capture<br/>3 viewports, 30 s per page"]
+  C2 --> C3["7 deterministic scanners<br/>300 links, 10 min per scanner"]
+  C3 --> C4["Comparisons<br/>design + content"]
+  C4 --> C5["Grouping<br/>846 findings → 75 issues"]
+  C5 --> A1["Chunking<br/>10 groups, ~20k tokens<br/>per request, 200 issues"]
+  A1 --> A2["AI provider<br/>RPM / TPM / RPD<br/>paced client-side"]
+  A2 --> A3["Validation<br/>grounding checks"]
+  A3 --> D["QA dashboard<br/>issues, evidence, reports"]
+  C5 -. "AI off or quota used" .-> D
+</pre>
+    </div>
+    <div class="explain"><p>In plain words: Figma and the documents are read once and turned into design values that a person confirms. The scan then crawls the site, captures each page in a real browser and runs the scanners, all without AI. AI only enters at the end, to explain the grouped issues, and the dotted line shows that the dashboard still works without it.</p></div>
+
+    <h3>4b. Three layers of limits, and which one you can change</h3>
+    <div class="panel">
+<pre class="mermaid">
+flowchart TB
+  subgraph L1["Provider limits (change with plan or money)"]
+    direction LR
+    P1["Figma Tier 1 per seat<br/>in the FILE's plan"]
+    P2["AI RPM / TPM / RPD<br/>per project or org"]
+    P3["AI monthly spend cap<br/>(Anthropic tiers)"]
+  end
+  subgraph L2["Our application limits (change with config or code)"]
+    direction LR
+    A1["Pages, depth, links<br/>per scan"]
+    A2["Request size, batch size,<br/>issues per scan"]
+    A3["One Figma link and one<br/>merged reference per project"]
+    A4["Workers and browser<br/>concurrency"]
+  end
+  subgraph L3["Machine limits (change with hardware)"]
+    direction LR
+    M1["CPU and RAM<br/>(Chromium per worker)"]
+    M2["Disk<br/>~4 MB evidence per page"]
+    M3["Network latency<br/>to the site"]
+  end
+  L1 --> T["Effective capacity =<br/>the smallest of the three"]
+  L2 --> T
+  L3 --> T
+</pre>
+    </div>
+    <div class="explain"><p>Capacity is set by whichever layer runs out first. A bigger AI context window changes none of these numbers. Upgrading our own Figma plan does not help with a client's file. Raising <code>SCAN_MAX_PAGES</code> does not make a slow machine faster.</p></div>
+
+    <h3>4c. What happens when a limit is reached</h3>
+    <div class="panel">
+<pre class="mermaid">
+flowchart TD
+  S["Request to Figma or AI"] --> R{"Response?"}
+  R -- "OK" --> OK["Store result,<br/>save checkpoint (Figma)"]
+  R -- "429, wait ≤ 60 s" --> W["Wait Retry-After,<br/>retry (max 3)"] --> S
+  R -- "429, long wait<br/>(Figma monthly cap)" --> CP["Stop read, keep pages read,<br/>partial draft, show upgrade link"] --> LATER["Continue reading later:<br/>only the missing pages"]
+  R -- "429, AI daily quota" --> FB["Remaining issues keep<br/>the scanners' wording"] --> NEXT["Recommended: next provider<br/>in a fallback chain (to build)"]
+  R -- "Too large" --> SPLIT{"Can it be split?"}
+  SPLIT -- "Figma batch" --> HALF["Split into halves,<br/>adapt batch size"] --> S
+  SPLIT -- "Single page or issue" --> MARK["Mark that item 'could not be read'<br/>and continue with the rest"]
+  R -- "5xx or timeout" --> BO["Retry with backoff"] --> R2{"Still failing?"}
+  R2 -- "no" --> OK
+  R2 -- "yes" --> MARK
+  CR["Worker crash"] --> ST{"What was running?"}
+  ST -- "Figma read" --> RQ["Re-queued from checkpoint<br/>(3 attempts)"]
+  ST -- "Scan" --> FAIL["Marked failed after 2 min<br/>without heartbeat;<br/>resume per step (to build)"]
+</pre>
+    </div>
+    <div class="explain"><p>Every limit leads to a recorded state, never a silent gap: waited and retried, stopped and resumable, or marked "could not be checked" with the reason. The two red-flag gaps today are the missing provider fallback and the missing scan resume. Both are in the roadmap.</p></div>
+
+    <h3>4d. Batching: why small pieces are more reliable</h3>
+    <div class="panel">
+<pre class="mermaid">
+flowchart LR
+  subgraph FIG["Figma file (53 pages)"]
+    direction TB
+    FA["GET file?depth=1<br/>page list, version"] --> FB["Batches of 10 pages<br/>pinned to one version"]
+    FB --> FC{"Batch > 50 MB?"}
+    FC -- yes --> FD["Split 10 → 5 → 3 …<br/>later batches use the size that fit"]
+    FC -- no --> FE["Merge values,<br/>checkpoint after each batch"]
+    FD --> FE
+  end
+  subgraph AI["AI (75 issues)"]
+    direction TB
+    IA["Group findings by rule"] --> IB["Batches of ≤ 10 groups,<br/>≤ ~20k tokens"]
+    IB --> IC["Pacer: ≤ RPM / TPM,<br/>2–3 in parallel"]
+    IC --> ID["Each batch validated<br/>on its own"]
+  end
+</pre>
+    </div>
+    <div class="explain"><p>A failure in one small piece costs only that piece. A 53-page Figma file is never one fragile 200 MB request, and one AI timeout affects 10 issues, not the whole report. Batches also fit inside per-minute limits, which keeps throughput steady instead of stop-start.</p></div>
+  </section>
+
+  <!-- 5 -->
+  <section aria-labelledby="s5">
+    <h2 id="s5">5. Scenario analysis</h2>
+    <p><b>Assumptions</b> <span class="tag t-estimate">estimate</span>: the timings scale linearly from the 24 Oct scan (17 pages, 3 viewports, 16 min). AI usage scales with issues at about 1,730 input and 610 output tokens per issue (measured). Issue counts grow slower than pages because findings are grouped. Server costs are excluded. The AI cost uses paid Gemini 3.6 Flash (current price) and Claude Haiku 5.5, per scan.</p>
+    <div class="scen">
+      <div class="card"><h3>1. Small: 5 pages, simple Figma</h3><dl>
+        <dt>Approach</dt><dd>1 project, 1 Figma frame link, defaults</dd>
+        <dt>Time</dt><dd>~6 min <span class="tag t-estimate">estimate</span></dd>
+        <dt>AI</dt><dd>~40 issues → 4 requests, ~70k in / 25k out</dd>
+        <dt>AI cost</dt><dd>Flash ~$0.14 · Haiku 5.5 ~$0.02 · free tier fits</dd>
+        <dt>Bottleneck</dt><dd>None</dd></dl></div>
+      <div class="card"><h3>2. Medium: 25 pages, several components</h3><dl>
+        <dt>Approach</dt><dd>1–2 projects (one per template)</dd>
+        <dt>Time</dt><dd>~25 min</dd>
+        <dt>AI</dt><dd>~85 issues → 9 requests, ~150k in / 52k out</dd>
+        <dt>AI cost</dt><dd>Flash ~$0.31 · Haiku ~$0.04 · free tier: about 1 scan/day</dd>
+        <dt>Bottleneck</dt><dd>Free-tier requests per day</dd></dl></div>
+      <div class="card"><h3>3. Large: 100 pages, complex Figma</h3><dl>
+        <dt>Approach</dt><dd>Project per template, frame links, max pages 100</dd>
+        <dt>Time</dt><dd>~1.5 h at current concurrency; ~35 min with <code>SCAN_CONCURRENCY</code> 8 on a strong machine</dd>
+        <dt>AI</dt><dd>~130 issues → 13–14 requests, ~225k in / 80k out</dd>
+        <dt>AI cost</dt><dd>Flash ~$0.47 · Haiku ~$0.06 · free tier: often stops partway</dd>
+        <dt>Bottleneck</dt><dd>Capture time, accessibility time, free AI quota, ~400 MB evidence</dd></dl></div>
+      <div class="card"><h3>4. Enterprise: 500+ pages, several Figma files</h3><dl>
+        <dt>Approach</dt><dd>Split by section into several projects (the 500-page cap is per scan); several workers</dd>
+        <dt>Time</dt><dd>~7 h for 500 pages on one worker; ~1–2 h spread over 4–6 workers</dd>
+        <dt>AI</dt><dd>200 issues per scan (cap) → 20 requests, ~350k in / 120k out</dd>
+        <dt>AI cost</dt><dd>Flash ~$0.72 · Haiku ~$0.10 per scan; paid tier required</dd>
+        <dt>Bottleneck</dt><dd>Our caps (500 pages, 300 links, 200 AI issues), disk (~2 GB per scan), Figma reads for several files</dd></dl></div>
+      <div class="card"><h3>5. Several client sites at once</h3><dl>
+        <dt>Approach</dt><dd><code>WORKER_CONCURRENCY</code> up to 8 per process, more worker processes</dd>
+        <dt>Bottleneck</dt><dd>AI pacing is per process, so N workers can send N× the RPM and hit 429s. Each client's Figma file is limited by the seat in that client's plan.</dd>
+        <dt>Needed</dt><dd>A shared rate limiter across workers (to build), per-client quota tracking</dd></dl></div>
+      <div class="card"><h3>6. A Figma file too large for one request</h3><dl>
+        <dt>Handled today</dt><dd>Read page by page (10 per batch, split on "too large", version-pinned, checkpointed). A single page over 50 MB is marked failed and the rest continue.</dd>
+        <dt>Better</dt><dd>Link the frames that matter (1 read) instead of the whole file</dd></dl></div>
+      <div class="card"><h3>7. AI quota reached during a scan</h3><dl>
+        <dt>Handled today</dt><dd>Scan completes. The remaining issues use the scanners' wording and the AI step reports it (seen on 22 Oct).</dd>
+        <dt>Better</dt><dd>Provider fallback chain (for example Gemini → Claude Haiku 5.5), and reuse of AI text for issues already seen</dd></dl></div>
+      <div class="card"><h3>8. Figma throttled or incomplete data</h3><dl>
+        <dt>Handled today</dt><dd>Short waits retried. Long waits (44 h seen) stop the read with a checkpoint and partial draft. Missing pages are listed, and unchanged files are not re-read.</dd>
+        <dt>Better</dt><dd>A Dev seat in the client's plan, or a copy of the needed frames in our own Professional team</dd></dl></div>
+    </div>
+  </section>
+
+  <!-- 6 -->
+  <section aria-labelledby="s6">
+    <h2 id="s6">6. Subscription and cost comparison</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Upgrade</th><th>Cost</th><th>What it actually raises</th><th>What it does not change</th></tr></thead>
+        <tbody>
+          <tr><td>Figma Dev seat, our own Professional team</td><td>$12/mo</td><td>Tier 1 to 15/min, <b>for files in our team</b></td><td>Client files in the client's plan (still ≤20/month with a view seat there)</td></tr>
+          <tr><td>Figma Dev seat in the client's Organization plan</td><td>$25/mo (annual), paid by or arranged with the client</td><td>Tier 1 to 20/min for that client's files</td><td>Our one-link, one-reference-per-project limits</td></tr>
+          <tr><td>Gemini paid Tier 1 (link billing)</td><td>Pay per token: ~$0.27 per 17-page scan; price doubles 1 Jan 2027</td><td>Higher RPM/RPD (numbers shown in AI Studio, not published). Client data no longer used to improve Google products</td><td>Our 20k-token requests and 200-issue cap; 503 "high demand" can still happen</td></tr>
+          <tr><td>Anthropic API (Start tier)</td><td>Pay per token: Haiku 5.5 ~$0.04, Sonnet 5.5 ~$0.72 per scan; spend cap $500/mo</td><td>1,000 RPM and 2M input TPM, enough for many parallel scans</td><td>Spend cap (Build $1,000, Scale $200,000); an unrecognized spend-cap 429 has no <code>retry-after</code></td></tr>
+          <tr><td>Groq Developer</td><td>gpt-oss-120b $0.15 / $0.60 per 1M</td><td>Cheap tokens</td><td>8K TPM: requests must be made smaller and scans take longer</td></tr>
+          <tr><td>Larger AI context window (any provider)</td><td>–</td><td>Nothing that matters to us</td><td>RPM, RPD, TPM and monthly totals: separate limits</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <h3>Estimated monthly AI cost <span class="tag t-estimate">estimate</span></h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Usage</th><th>Assumption</th><th class="num">Gemini 3.6 Flash</th><th class="num">Gemini 3.1 Flash-Lite</th><th class="num">Claude Haiku 5.5</th><th class="num">Claude Sonnet 5.5</th></tr></thead>
+        <tbody>
+          <tr><td>Small</td><td>20 scans × 25 pages</td><td class="num">~$6</td><td class="num">~$2.40</td><td class="num">~$0.80</td><td class="num">~$16</td></tr>
+          <tr><td>Medium</td><td>100 scans × 100 pages</td><td class="num">~$47</td><td class="num">~$18</td><td class="num">~$6</td><td class="num">~$124</td></tr>
+          <tr><td>Large</td><td>500 scans × 500 pages</td><td class="num">~$360</td><td class="num">~$135</td><td class="num">~$50</td><td class="num">~$955</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="lead" style="font-size:14px">Based on measured tokens per issue and the issue estimates in section 5, at standard (non-batch) prices. Batch APIs halve these figures for non-urgent scans. Figma seats, servers and storage are extra and not included.</p>
+  </section>
+
+  <!-- 7 -->
+  <section aria-labelledby="s7">
+    <h2 id="s7">7. Optimization strategies, ranked by impact and effort</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>#</th><th>Strategy</th><th>Limit it solves</th><th>Benefit</th><th>Effort</th><th>Trade-off</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>Deterministic scanners for accessibility, SEO, security, links, performance and responsive</td><td>AI cost and accuracy</td><td>All findings come from code; AI only explains them</td><td>–</td><td>–</td><td><span class="tag t-confirmed">built</span></td></tr>
+          <tr><td>2</td><td>Group findings into issues before AI</td><td>AI requests</td><td>846 → 75 (11× fewer items)</td><td>–</td><td>–</td><td><span class="tag t-confirmed">built</span></td></tr>
+          <tr><td>3</td><td>Figma version check + frame links + page batches + checkpoint</td><td>Tier 1 quota</td><td>0 requests for unchanged files</td><td>–</td><td>–</td><td><span class="tag t-confirmed">built</span></td></tr>
+          <tr><td>4</td><td><b>Reuse AI text for issues already seen</b> (same fingerprint, same evidence)</td><td>RPD, cost</td><td>Re-scans need AI only for new or changed issues; often 50–90% fewer requests <span class="tag t-estimate">estimate</span></td><td>Low–medium</td><td>Changed evidence must invalidate the cache</td><td><span class="tag t-risk">to build</span></td></tr>
+          <tr><td>5</td><td><b>Provider fallback chain</b> on daily quota or 503</td><td>Availability</td><td>No issue left unexplained because one provider is busy</td><td>Medium</td><td>Mixed wording style; second key to manage</td><td><span class="tag t-risk">to build</span></td></tr>
+          <tr><td>6</td><td><b>Per-template design references</b> (Figma frame ↔ URL pattern)</td><td>Accuracy (one merged reference)</td><td>Fewer false design mismatches; one project covers several templates</td><td>Medium–high</td><td>More setup per project</td><td><span class="tag t-risk">to build</span></td></tr>
+          <tr><td>7</td><td><b>Usage and cost dashboard</b> (tokens, latency, quotas per project)</td><td>Visibility</td><td>Cost per project, early warning before quotas run out</td><td>Low (data already in <code>ai_run</code>)</td><td>–</td><td><span class="tag t-risk">to build</span></td></tr>
+          <tr><td>8</td><td>Model routing: cheap model for simple rules, stronger model for design/content reasoning</td><td>Cost</td><td>Most issues handled at Haiku/Flash-Lite prices</td><td>Medium</td><td>Two models to evaluate</td><td><span class="tag t-risk">to build</span></td></tr>
+          <tr><td>9</td><td>Scan resume per step after a crash or restart</td><td>Reliability on long scans</td><td>A 7-hour scan no longer restarts from zero</td><td>Medium–high</td><td>More checkpoint data</td><td><span class="tag t-risk">to build</span></td></tr>
+          <tr><td>10</td><td>Shared rate limiter across workers (in PostgreSQL)</td><td>Multi-client concurrency</td><td>Many workers stay within one provider limit</td><td>Medium</td><td>Small latency per request</td><td><span class="tag t-risk">to build</span></td></tr>
+          <tr><td>11</td><td>Batch APIs for non-urgent scans</td><td>Cost</td><td>50% cheaper AI (all three providers)</td><td>Medium</td><td>Results in minutes to hours, not live</td><td><span class="tag t-risk">to build</span></td></tr>
+          <tr><td>12</td><td>Screenshot compression (WebP), deduplication, retention</td><td>Disk (~4 MB/page)</td><td>3–5× less storage <span class="tag t-estimate">estimate</span></td><td>Low</td><td>Slightly lower image quality</td><td><span class="tag t-risk">to build</span> (garbage collection exists)</td></tr>
+          <tr><td>13</td><td>Client-side pacing, retries with backoff, request-size limits</td><td>429 errors</td><td>Steady throughput on free tiers</td><td>–</td><td>–</td><td><span class="tag t-confirmed">built</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- 8 -->
+  <section aria-labelledby="s8">
+    <h2 id="s8">8. Recommended architecture</h2>
+    <div class="panel">
+<pre class="mermaid">
+flowchart LR
+  subgraph IN["Per client project"]
+    direction TB
+    I1["Website + page links"]
+    I2["Figma file +<br/>template ↔ URL mapping"]
+    I3["Guidelines, fonts,<br/>approved content"]
+  end
+  IN --> REFS["Reference service<br/>version-checked, cached,<br/>one reference per template"]
+  IN --> JOBS[("Job queue + step checkpoints<br/>PostgreSQL")]
+  JOBS --> WK["Worker pool<br/>N workers, shared rate limiter"]
+  WK --> DET["Deterministic scanners<br/>+ comparisons"]
+  DET --> GRP["Issue grouping +<br/>AI text cache by fingerprint"]
+  GRP --> ROUTE{"Model router"}
+  ROUTE -- "simple rules" --> CHEAP["Cheap model<br/>(Haiku 5.5 / Flash-Lite)"]
+  ROUTE -- "design/content reasoning" --> STRONG["Stronger model<br/>(Sonnet 5.5 / Flash)"]
+  CHEAP --> FBK["Fallback chain<br/>on quota / 503"]
+  STRONG --> FBK
+  FBK --> VAL["Grounding validation<br/>verified · potential · unable to verify"]
+  VAL --> OUT["Dashboard + reports"]
+  WK --> MON["Usage monitor<br/>tokens, cost, quota, latency<br/>per project and provider"]
+</pre>
+    </div>
+    <div class="explain"><p>The current design already meets most of the requirements:</p>
+      <ul class="tight">
+        <li>multi-project support, all six input types and evidence-backed findings;</li>
+        <li>the three verdict states (confirmed, potential, unable to verify);</li>
+        <li>a provider abstraction, Figma resume and token logging.</li>
+      </ul>
+      <p>Five additions close the gaps:</p>
+      <ul class="tight">
+        <li>per-template references;</li>
+        <li>an AI text cache;</li>
+        <li>a model router with a fallback chain;</li>
+        <li>step-level scan resume;</li>
+        <li>a shared rate limiter with a cost dashboard.</li>
+      </ul>
+      <p>None of them needs a new subscription.</p></div>
+  </section>
+
+  <!-- 9 -->
+  <section aria-labelledby="s9">
+    <h2 id="s9">9. Prioritized roadmap</h2>
+    <div class="road">
+      <div class="card"><h3>Immediate (days, config or small code)</h3><ol>
+        <li>Move client scans to a <b>paid AI tier</b> (Gemini Tier 1 or Claude Haiku 5.5). Under Google's terms, free-tier content may be used to improve products and read by human reviewers.</li>
+        <li>Usage and cost dashboard from the existing <code>ai_run</code> data.</li>
+        <li>Reuse AI text for issues already seen in earlier scans.</li>
+        <li>Link Figma <b>frames</b>, one project per template; avoid whole-file reads.</li>
+        <li>Store the second provider's key; set <code>AI_REQUESTS_PER_MINUTE</code> to the paid tier's limit.</li>
+      </ol></div>
+      <div class="card"><h3>Medium term (weeks)</h3><ol>
+        <li>Provider fallback chain on daily quota and 503.</li>
+        <li>Per-template design references (frame ↔ URL pattern).</li>
+        <li>Model routing (cheap vs strong).</li>
+        <li>Screenshot compression and retention policy.</li>
+        <li>Agree Figma access with clients: a Dev seat in their plan, or frames copied to our team.</li>
+      </ol></div>
+      <div class="card"><h3>Enterprise scale (months)</h3><ol>
+        <li>Step-level scan resume and retry of single steps.</li>
+        <li>Shared, database-backed rate limiter for many workers.</li>
+        <li>Batch API mode for overnight scans (50% cheaper).</li>
+        <li>Per-client quotas and priority queues.</li>
+        <li>Splitting sites over 500 pages into section projects automatically.</li>
+      </ol></div>
+    </div>
+  </section>
+
+  <!-- 10 -->
+  <section aria-labelledby="s10">
+    <h2 id="s10">10. Decision matrix: subscription, code, or both</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Limitation</th><th>Subscription</th><th>Code / config</th><th>Verdict</th></tr></thead>
+        <tbody>
+          <tr><td>Figma ≤20 reads/month (view seat)</td><td>Dev/Full seat <b>in the file's plan</b></td><td>Caching and frame links (built); reuse across projects</td><td><b>Both</b>: code first; a seat only for clients with frequent design changes</td></tr>
+          <tr><td>AI requests per day (free tier)</td><td>Paid tier</td><td>AI text cache, fallback chain</td><td><b>Both</b>, and paid is needed anyway for client data</td></tr>
+          <tr><td>AI per-minute 429s</td><td>Higher tier</td><td>Pacing (built), shared limiter</td><td><b>Code</b> first</td></tr>
+          <tr><td>AI provider outage / 503</td><td>No</td><td>Fallback chain</td><td><b>Code</b></td></tr>
+          <tr><td>Context window</td><td>No (not binding)</td><td>Chunking (built)</td><td><b>Nothing</b> to do</td></tr>
+          <tr><td>500 pages, 300 links, 200 AI issues per scan</td><td>No</td><td>Config / code</td><td><b>Code</b></td></tr>
+          <tr><td>One merged design reference</td><td>No</td><td>Per-template references</td><td><b>Code</b></td></tr>
+          <tr><td>Long scans restart after a crash</td><td>No</td><td>Step resume</td><td><b>Code</b></td></tr>
+          <tr><td>Many clients in parallel</td><td>Higher AI tier at large scale</td><td>Workers, shared limiter</td><td><b>Both</b></td></tr>
+          <tr><td>Monthly AI spend cap (Anthropic)</td><td>Tier increase</td><td>Spend monitoring, cheap-model routing</td><td><b>Both</b></td></tr>
+          <tr><td>Disk for evidence</td><td>Storage / hosting</td><td>Compression, retention</td><td><b>Code</b> first</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section aria-labelledby="s11">
+    <h2 id="s11">Unknowns, and conditional recommendations</h2>
+    <ul class="tight">
+      <li><b>Gemini free-tier daily limit:</b> not published by Google; about 20/day observed. <i>If</i> a scan needs more than the day's remainder, the rest of the issues keep the scanners' wording. Check AI Studio → Rate limits.</li>
+      <li><b>Gemini paid-tier RPM/RPD numbers:</b> shown only in AI Studio per project. Read them after linking billing, then set <code>AI_REQUESTS_PER_MINUTE</code> to match.</li>
+      <li><b>Figma Enterprise Tier 1 values</b> and <b>Groq free-plan values</b> could not be read reliably from the official pages; check the account consoles.</li>
+      <li><b>Client Figma access:</b> unknown whether Ascendion would grant a Dev seat. <i>If not</i>, copy the needed frames into our own team (a $12/mo Dev seat gives 15/min) or keep the view seat and rely on caching.</li>
+      <li><b>Hosting costs</b> (CPU, RAM, disk for 500-page scans) depend on where QA Copilot is deployed and are not included.</li>
+      <li><b>Issue growth beyond 17 pages</b> is estimated, not measured. A 100-page test scan would confirm the scenario numbers.</li>
+    </ul>
+  </section>
+
+  <section aria-labelledby="src">
+    <h2 id="src">Sources (read 24 October 2026)</h2>
+    <div class="sources">
+      <a href="https://developers.figma.com/docs/rest-api/rate-limits/">Figma REST API rate limits: tiers, seats, plans, 429 headers (limits in effect since 17 Nov 2025)</a>
+      <a href="https://www.figma.com/pricing/">Figma pricing: seat prices per plan</a>
+      <a href="https://help.figma.com/hc/en-us/articles/360038511293-Create-and-manage-pages">Figma Help Center: Create and manage pages (3 pages per file on Starter)</a>
+      <a href="https://forum.figma.com/ask-the-community-7/how-to-design-file-more-than-2gb-25908">Figma forum: file memory (2 GB per browser tab, staff reply)</a>
+      <a href="https://ai.google.dev/gemini-api/docs/pricing">Gemini API pricing (page updated 22 Oct 2026)</a>
+      <a href="https://ai.google.dev/gemini-api/docs/rate-limits">Gemini API rate limits and usage tiers (page updated 15 Oct 2026)</a>
+      <a href="https://ai.google.dev/gemini-api/terms">Gemini API terms: free-tier data use</a>
+      <a href="https://platform.claude.com/docs/en/about-claude/pricing">Anthropic Claude pricing</a>
+      <a href="https://platform.claude.com/docs/en/api/rate-limits">Anthropic rate limits and spend caps</a>
+      <a href="https://developers.openai.com/api/docs/pricing">OpenAI API pricing</a>
+      <a href="https://console.groq.com/docs/rate-limits">Groq rate limits (Developer plan base limits)</a>
+      <a href="https://console.groq.com/docs/models">Groq models: context, completion limits, prices</a>
+      <span>Our measurements: QA Copilot database, Ascendion scans of 22 Oct (project Ascendion_Test) and 24 Oct (Ascendion_Testing_2); <code>packages/core/src/config.ts</code>; <code>LLM_PROVIDER_SETUP.md</code>; <code>FIGMA_INTEGRATION.md</code>.</span>
+    </div>
+  </section>
+
+  <footer>Prices and limits change without notice. Recheck the linked pages before budgeting. Estimates are marked as such, and their assumptions are stated in section 5.</footer>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js"></script>
+<script>
+  mermaid.initialize({ startOnLoad: true, securityLevel: "strict", theme: window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "default" });
+</script>
+</body>
+</html>

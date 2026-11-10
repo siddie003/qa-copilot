@@ -24,6 +24,7 @@ import { CompareForm } from "@/components/history/compare-form";
 import { Alert } from "@/components/ui/alert";
 import { IssueStatusBadge, SeverityBadge, StepStatus } from "@/components/ui/badges";
 import { EmptyState } from "@/components/ui/empty-state";
+import { Pagination } from "@/components/ui/pagination";
 import { Card, StatTile } from "@/components/ui/stat";
 import { cn } from "@/lib/cn";
 import { formatDateTime, scanStatusLabel } from "@/lib/format";
@@ -91,7 +92,7 @@ function FindingRow({
 }) {
   const ref = (f: ComparisonFindingRef, scanId: string, label: string) => (
     <Link
-      href={`/projects/${projectId}/scans/${scanId}/findings#${f.displayId}`}
+      href={`/projects/${projectId}/scans/${scanId}/findings?finding=${f.displayId}#${f.displayId}`}
       prefetch={false}
       className="font-mono text-xs text-primary underline"
     >
@@ -315,6 +316,13 @@ function StepsTable({
   );
 }
 
+/**
+ * Issues rendered per category (each row carries its finding-level detail). A comparison of
+ * thousands of issues produced a 26 MB page in Phase 16 testing; the counts above stay complete.
+ */
+const PREVIEW_PER_CATEGORY = 50;
+const PAGE_SIZE = 200;
+
 export default async function CompareScansPage({
   params,
   searchParams,
@@ -364,6 +372,7 @@ export default async function CompareScansPage({
     ? (str(q.show) as ChangeCategory)
     : null;
   const base = `/projects/${project.id}/history/compare?base=${pair.base.id}&target=${pair.target.id}`;
+  const page = Math.max(1, Number.parseInt(str(q.page) ?? "1", 10) || 1);
   // Confirming fixes is offered only against the latest comparable scan: an older comparison
   // may be contradicted by a later scan that found the issue again.
   const targetIsLatest = pair.scans.find(comparisonsRepo.isComparable)?.id === pair.target.id;
@@ -463,6 +472,9 @@ export default async function CompareScansPage({
                 {(show ? [show] : CHANGE_CATEGORIES).map((k) => {
                   const items = result.issues.filter((i) => i.category === k);
                   if (!items.length && !show) return null;
+                  const shown = show
+                    ? items.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
+                    : items.slice(0, PREVIEW_PER_CATEGORY);
                   return (
                     <section
                       key={k}
@@ -497,7 +509,7 @@ export default async function CompareScansPage({
                       </div>
                       {items.length ? (
                         <ul className="divide-y divide-border">
-                          {items.map((item) => (
+                          {shown.map((item) => (
                             <IssueRow
                               key={item.trackId}
                               item={item}
@@ -508,6 +520,29 @@ export default async function CompareScansPage({
                         </ul>
                       ) : (
                         <p className="px-4 py-3 text-sm text-muted">No issues in this category.</p>
+                      )}
+                      {!show && items.length > shown.length && (
+                        <p className="border-t border-border px-4 py-3 text-sm">
+                          Showing {shown.length} of {items.length}.{" "}
+                          <Link
+                            href={`${base}&show=${k}#issues`}
+                            className="text-primary hover:underline"
+                          >
+                            Show all {items.length} {CHANGE_CATEGORY_LABELS[k].toLowerCase()} issues
+                          </Link>
+                        </p>
+                      )}
+                      {show && (
+                        <div className="px-4 pb-3">
+                          <Pagination
+                            page={page}
+                            pageSize={PAGE_SIZE}
+                            total={items.length}
+                            basePath={`/projects/${project.id}/history/compare`}
+                            params={q}
+                            noun="issues"
+                          />
+                        </div>
                       )}
                     </section>
                   );

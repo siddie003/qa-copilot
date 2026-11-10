@@ -402,14 +402,20 @@ export const seoScanner: Scanner = {
       "No rel=canonical",
       "Without a canonical URL, duplicate URLs (tracking parameters, trailing slashes) compete in search results.",
     );
+    const ogFailing = facts.filter((f) => Object.values(f.og).some((v) => !v));
+    // Name the tags that are absent: often only og:image is missing, not Open Graph as a whole.
+    const ogMissing = Object.keys(facts[0]?.og ?? {}).filter((tag) =>
+      ogFailing.some((f) => !f.og[tag]),
+    );
+    const ogAll = ogMissing.length === Object.keys(facts[0]?.og ?? {}).length;
     aggregate(
       "open-graph-missing",
-      "Open Graph tags are missing",
-      facts.filter((f) => Object.values(f.og).some((v) => !v)),
+      ogAll ? "Open Graph tags are missing" : `Open Graph tag missing: ${ogMissing.join(", ")}`,
+      ogFailing,
       "low",
       "og:title, og:description and og:image",
-      "One or more Open Graph tags missing",
-      "Links shared on social networks and chat apps will not have a proper preview.",
+      `Missing: ${ogMissing.join(", ")}`,
+      `Missing ${ogMissing.join(", ")}, so links shared on social networks and chat apps ${ogMissing.includes("og:image") ? "show no preview image" : "do not have a complete preview"}.`,
     );
     aggregate(
       "structured-data-absent",

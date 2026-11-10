@@ -3,6 +3,7 @@ import { getDb, scansRepo } from "@qa/db";
 import { Gauge } from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
+import { CheckParts, type CheckPart } from "@/components/scans/check-parts";
 import { StepStatus } from "@/components/ui/badges";
 import { EmptyState } from "@/components/ui/empty-state";
 import { formatDateTime, formatDuration } from "@/lib/format";
@@ -116,6 +117,9 @@ export default async function ScannerResultsPage({ params }: { params: Promise<{
                       View issues and evidence checks
                     </Link>
                   ) : null}
+                  {Array.isArray(r.checks?.parts) && (
+                    <CheckParts parts={r.checks.parts as CheckPart[]} compact />
+                  )}
                   {r.checks?.comparison ? (
                     <Link
                       href={`/projects/${project.id}/scans/${latest.id}/comparisons`}

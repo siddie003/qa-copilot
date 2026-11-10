@@ -2,6 +2,7 @@ import {
   categoryLabel,
   clip,
   GROUNDING_LABELS,
+  PART_STATUS_LABELS,
   SEVERITY_LABELS,
   STATUS_LABELS,
   STEP_STATUS_LABELS,
@@ -15,6 +16,11 @@ import type { ReportData, ReportFinding, ReportIssue } from "./types";
  * and all network requests blocked). Every value is HTML-escaped: scanned website content can
  * never become markup. No external fonts, images or scripts.
  */
+
+/** Guide text: escaped, with `code` spans as <code>. */
+function rich(value: string): string {
+  return esc(value).replace(/`([^`]+)`/g, "<code>$1</code>");
+}
 
 export function esc(value: string | number | null | undefined): string {
   if (value === null || value === undefined) return "";
@@ -66,6 +72,8 @@ tr { break-inside: avoid; }
 .issue-id { font-family: ui-monospace, Consolas, monospace; color: #4b5563; font-size: 8.5pt; }
 .badges { margin: 3pt 0 6pt; display: flex; flex-wrap: wrap; gap: 4pt; }
 .callout { border-left: 2.5pt solid #d97706; background: #fffbeb; padding: 4pt 8pt; margin: 4pt 0 6pt; font-size: 9pt; }
+dl.plain { grid-template-columns: 38mm 1fr; font-size: 9.5pt; }
+.issue ol { margin: 2pt 0 4pt 14pt; padding: 0; font-size: 9pt; }
 dl { display: grid; grid-template-columns: 26mm 1fr; gap: 2pt 8pt; margin: 4pt 0 6pt; font-size: 9pt; }
 dt { color: #4b5563; }
 dd { margin: 0; overflow-wrap: anywhere; }
@@ -141,9 +149,24 @@ function issue(i: ReportIssue) {
         ? `<div class="callout">Needs review: the evidence suggests a problem but does not confirm it.</div>`
         : ""
   }
+  <dl class="plain">
+    <dt>What is the problem?</dt><dd>${rich(i.plainLanguage.problem)}</dd>
+    <dt>Why does it matter?</dt><dd>${rich(i.plainLanguage.whyItMatters)}</dd>
+    <dt>What should I do next?</dt><dd>${rich(i.plainLanguage.nextAction)}</dd>
+  </dl>
+  <div class="label">Fix steps</div>
+  <ol>${i.plainLanguage.steps.map((s) => `<li>${rich(s)}</li>`).join("")}</ol>
+  <div class="label">How to verify the fix</div>
+  <ol>${i.plainLanguage.verify.map((s) => `<li>${rich(s)}</li>`).join("")}</ol>
+  <p class="note">${
+    i.plainLanguage.aiWritten.length
+      ? `Written by AI and checked against the evidence: ${esc(i.plainLanguage.aiWritten.join(", "))}; the rest is built-in guidance`
+      : "Built-in guidance for this rule"
+  }, filled in with this issue's scan data. Example code is on the issue page.</p>
+  <div class="label">Scanner description</div>
   <p>${multiline(i.description)}</p>
   <dl>${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>
-  ${i.recommendation ? `<div class="label">How to fix</div><p>${multiline(i.recommendation)}</p>` : ""}
+  ${i.recommendation ? `<div class="label">Recommendation stored with the issue</div><p>${multiline(i.recommendation)}</p>` : ""}
   <div class="label">Source findings (${i.findings.length})</div>
   <ul class="findings">${i.findings.map((f) => finding(f, i)).join("")}</ul>
 </section>`;
@@ -160,6 +183,14 @@ export function renderHtml(d: ReportData): string {
         x.error ? `Error: ${esc(x.error)}` : esc(x.statusReason),
         x.comparison
           ? `matched ${x.comparison.matched}, mismatched ${x.comparison.confirmedMismatch}, needs review ${x.comparison.potentialMismatch}, unable to verify ${x.comparison.unableToVerify}`
+          : "",
+        x.parts.length
+          ? x.parts
+              .map(
+                (p) =>
+                  `${esc(p.label)}: ${esc(PART_STATUS_LABELS[p.status] ?? p.status)}${p.status === "completed" ? "" : ` (${esc(p.detail)})`}`,
+              )
+              .join("<br>")
           : "",
         x.tool ? `<span class="meta">${esc(x.tool)}</span>` : "",
       ]

@@ -1,18 +1,24 @@
 import { AppError, FINDING_SOURCE_LABELS, FINDING_SOURCES, SEVERITIES } from "@qa/core";
 import { getDb, pipelineRepo, scanIssuesRepo } from "@qa/db";
-import { SearchCheck } from "lucide-react";
+import { ChevronRight, SearchCheck } from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { EvidenceView, type EvidenceItem } from "@/components/findings/evidence-view";
+import { LazyFindingGuide } from "@/components/issues/lazy-finding-guide";
+import type { ExplainedFinding } from "@/components/issues/plain-explanation";
 import { SEVERITY_LABELS, SeverityBadge } from "@/components/ui/badges";
 import { buttonClasses } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { inputClasses } from "@/components/ui/field-styles";
+import { Pagination } from "@/components/ui/pagination";
 import { loadProjectForPage } from "@/server/loaders";
 import { getScan } from "@/server/scans";
 
 export const metadata: Metadata = { title: "Scan findings" };
+
+/** Findings per page: each one carries its evidence (a 6,600-finding scan was a 64 MB page). */
+const PAGE_SIZE = 100;
 
 const VERDICT_LABELS: Record<string, string> = {
   confirmed: "Confirmed",
@@ -54,14 +60,23 @@ export default async function FindingsPage({
   const severity = (Array.isArray(q.severity) ? q.severity : q.severity ? [q.severity] : []).filter(
     (s) => (SEVERITIES as readonly string[]).includes(s),
   );
+  const filter = { scanner: scanner || undefined, severity };
+  const order = await pipelineRepo.listFindingDisplayIds(getDb(), user.id, scanId, filter);
+  // `?finding=SEO-004` (links from issues) opens the page that contains that finding.
+  const linked = typeof q.finding === "string" ? (order?.indexOf(q.finding) ?? -1) : -1;
+  const requested = Number.parseInt(typeof q.page === "string" ? q.page : "1", 10) || 1;
+  const pageCount = Math.max(1, Math.ceil((order?.length ?? 0) / PAGE_SIZE));
+  const page =
+    linked >= 0 ? Math.floor(linked / PAGE_SIZE) + 1 : Math.min(Math.max(1, requested), pageCount);
   const [findings, counts, issueOf] = await Promise.all([
-    pipelineRepo.listFindingsForScan(getDb(), user.id, scanId, {
-      scanner: scanner || undefined,
-      severity,
+    pipelineRepo.listFindingsForScan(getDb(), user.id, scanId, filter, {
+      offset: (page - 1) * PAGE_SIZE,
+      limit: PAGE_SIZE,
     }),
     pipelineRepo.findingCounts(getDb(), scanId),
     scanIssuesRepo.findingIssueLinks(getDb(), scanId),
   ]);
+  const matching = order?.length ?? 0;
   const totalAll = counts.reduce((s, c) => s + c.n, 0);
   const base = `/projects/${project.id}/scans/${scanId}/findings`;
   const scannerRuns = scan.runs.filter((r) =>
@@ -150,79 +165,135 @@ export default async function FindingsPage({
           }
         />
       ) : (
-        <ul className="space-y-2">
-          {findings.map((f) => (
-            <li
-              key={f.id}
-              id={f.displayId}
-              className="scroll-mt-4 rounded-lg border border-border bg-surface"
-            >
-              <details>
-                <summary className="flex cursor-pointer list-none flex-wrap items-center gap-x-3 gap-y-1 px-4 py-3">
-                  <span className="font-mono text-xs text-subtle">{f.displayId}</span>
-                  <SeverityBadge severity={f.severity} />
-                  <span className="min-w-0 flex-1 font-medium">{f.title}</span>
-                  <span className="text-xs text-muted">
-                    {VERDICT_LABELS[f.verdict] ?? f.verdict}
-                  </span>
-                </summary>
-                <div className="space-y-4 border-t border-border px-4 py-4 text-sm">
-                  <p>{f.message}</p>
-                  <dl className="grid gap-2 sm:grid-cols-[9rem_1fr]">
-                    <dt className="text-muted">Scanner / rule</dt>
-                    <dd>
-                      {FINDING_SOURCE_LABELS[f.scanner] ?? f.scanner} ·{" "}
-                      <code className="font-mono text-xs">{f.ruleId}</code>
-                    </dd>
-                    <dt className="text-muted">Page</dt>
-                    <dd className="break-all">{f.pageUrl ?? "Site-wide"}</dd>
-                    {f.selector && (
-                      <>
-                        <dt className="text-muted">Element</dt>
-                        <dd className="break-all font-mono text-xs">{f.selector}</dd>
-                      </>
-                    )}
-                    <dt className="text-muted">Viewport</dt>
-                    <dd>{f.viewport ?? "All / not viewport-specific"}</dd>
-                    {f.expected && (
-                      <>
-                        <dt className="text-muted">Expected</dt>
-                        <dd className="break-words">{f.expected}</dd>
-                      </>
-                    )}
-                    {f.actual && (
-                      <>
-                        <dt className="text-muted">Actual</dt>
-                        <dd className="break-words">{f.actual}</dd>
-                      </>
-                    )}
-                    <dt className="text-muted">Confidence</dt>
-                    <dd>{Math.round(f.confidence * 100)}%</dd>
-                    {issueOf.get(f.id) && (
-                      <>
-                        <dt className="text-muted">Issue</dt>
-                        <dd>
-                          <Link
-                            href={`/projects/${project.id}/issues/${issueOf.get(f.id)!.displayNo}?scan=${scanId}`}
-                            className="text-primary hover:underline"
-                          >
-                            ISSUE-{issueOf.get(f.id)!.displayNo}
-                          </Link>
-                        </dd>
-                      </>
-                    )}
-                  </dl>
-                  <div>
-                    <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
-                      Evidence
-                    </h3>
-                    <EvidenceView items={f.evidence as EvidenceItem[]} />
+        <>
+          <p className="text-sm text-muted" aria-live="polite">
+            {matching > PAGE_SIZE
+              ? `Showing ${(page - 1) * PAGE_SIZE + 1}–${(page - 1) * PAGE_SIZE + findings.length} of ${matching} findings`
+              : `${matching} finding${matching === 1 ? "" : "s"}`}
+            {scanner || severity.length ? " matching these filters" : ""}
+          </p>
+          <ul className="space-y-2">
+            {findings.map((f) => (
+              <li
+                key={f.id}
+                id={f.displayId}
+                className="scroll-mt-4 rounded-lg border border-border bg-surface"
+              >
+                <details open={f.displayId === q.finding}>
+                  <summary className="flex cursor-pointer list-none flex-wrap items-center gap-x-3 gap-y-1 px-4 py-3">
+                    <span className="font-mono text-xs text-subtle">{f.displayId}</span>
+                    <SeverityBadge severity={f.severity} />
+                    <span className="min-w-0 flex-1 font-medium">{f.title}</span>
+                    <span className="text-xs text-muted">
+                      {VERDICT_LABELS[f.verdict] ?? f.verdict}
+                    </span>
+                  </summary>
+                  <div className="space-y-4 border-t border-border px-4 py-4 text-sm">
+                    <LazyFindingGuide
+                      initiallyOpen={f.displayId === q.finding}
+                      finding={{
+                        displayId: f.displayId,
+                        scanner: f.scanner,
+                        ruleId: f.ruleId,
+                        verdict: f.verdict,
+                        viewport: f.viewport,
+                        selector: f.selector,
+                        pageUrl: f.pageUrl,
+                        expected: f.expected,
+                        actual: f.actual,
+                        // Screenshots are not used by the guide (keeps the page payload small).
+                        evidence: (f.evidence as ExplainedFinding["evidence"]).filter(
+                          (e) => e.kind !== "screenshot",
+                        ),
+                      }}
+                      issueHref={
+                        issueOf.get(f.id)
+                          ? `/projects/${project.id}/issues/${issueOf.get(f.id)!.displayNo}?scan=${scanId}`
+                          : undefined
+                      }
+                      issueLabel={
+                        issueOf.get(f.id) ? `ISSUE-${issueOf.get(f.id)!.displayNo}` : undefined
+                      }
+                    />
+                    <details className="group/tech rounded-md border border-border">
+                      <summary className="flex cursor-pointer list-none flex-wrap items-center gap-x-2 gap-y-0.5 px-3 py-2 font-semibold hover:bg-surface-muted [&::-webkit-details-marker]:hidden">
+                        <ChevronRight
+                          aria-hidden
+                          className="size-4 shrink-0 text-muted transition-transform group-open/tech:rotate-90"
+                        />
+                        Technical details and evidence
+                        <span className="font-normal text-muted">
+                          (scanner message, rule, element, raw evidence)
+                        </span>
+                      </summary>
+                      <div className="space-y-4 border-t border-border px-3 py-3">
+                        <p>{f.message}</p>
+                        <dl className="grid gap-2 sm:grid-cols-[9rem_1fr]">
+                          <dt className="text-muted">Scanner / rule</dt>
+                          <dd>
+                            {FINDING_SOURCE_LABELS[f.scanner] ?? f.scanner} ·{" "}
+                            <code className="font-mono text-xs">{f.ruleId}</code>
+                          </dd>
+                          <dt className="text-muted">Page</dt>
+                          <dd className="break-all">{f.pageUrl ?? "Site-wide"}</dd>
+                          {f.selector && (
+                            <>
+                              <dt className="text-muted">Element</dt>
+                              <dd className="break-all font-mono text-xs">{f.selector}</dd>
+                            </>
+                          )}
+                          <dt className="text-muted">Viewport</dt>
+                          <dd>{f.viewport ?? "All / not viewport-specific"}</dd>
+                          {f.expected && (
+                            <>
+                              <dt className="text-muted">Expected</dt>
+                              <dd className="break-words">{f.expected}</dd>
+                            </>
+                          )}
+                          {f.actual && (
+                            <>
+                              <dt className="text-muted">Actual</dt>
+                              <dd className="break-words">{f.actual}</dd>
+                            </>
+                          )}
+                          <dt className="text-muted">Confidence</dt>
+                          <dd>{Math.round(f.confidence * 100)}%</dd>
+                          {issueOf.get(f.id) && (
+                            <>
+                              <dt className="text-muted">Issue</dt>
+                              <dd>
+                                <Link
+                                  href={`/projects/${project.id}/issues/${issueOf.get(f.id)!.displayNo}?scan=${scanId}`}
+                                  className="text-primary hover:underline"
+                                >
+                                  ISSUE-{issueOf.get(f.id)!.displayNo}
+                                </Link>
+                              </dd>
+                            </>
+                          )}
+                        </dl>
+                        <div>
+                          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
+                            Evidence
+                          </h3>
+                          <EvidenceView items={f.evidence as EvidenceItem[]} />
+                        </div>
+                      </div>
+                    </details>
                   </div>
-                </div>
-              </details>
-            </li>
-          ))}
-        </ul>
+                </details>
+              </li>
+            ))}
+          </ul>
+          <Pagination
+            page={page}
+            pageSize={PAGE_SIZE}
+            total={matching}
+            basePath={base}
+            params={{ scanner: scanner || undefined, severity }}
+            noun="findings"
+          />
+        </>
       )}
 
       <section

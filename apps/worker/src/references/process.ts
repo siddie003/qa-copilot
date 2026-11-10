@@ -1,8 +1,10 @@
 import {
   AIProviderError,
+  CHARS_PER_TOKEN_ESTIMATE,
   createAIProvider,
   extractGuidelineWithAi,
   GUIDELINE_PROMPT_VERSION,
+  GUIDELINE_SYSTEM_PROMPT,
   mergeAssistedSpec,
   type AIProvider,
   type AssistedExtraction,
@@ -20,12 +22,13 @@ import {
   extractInIsolation,
   ExtractionError,
   type ExtractionResult,
-  fetchFigmaFile,
   FigmaError,
-  normalizeFigma,
 } from "@qa/reference";
-import { decryptSecret, validateDocumentUpload, verifyDocumentContent } from "@qa/security";
+import { decryptSecret } from "@qa/security";
 import type { Storage } from "@qa/storage";
+import { processDocument, processIndexingJob } from "./documents";
+import { processFigmaReference } from "./figma";
+import { readUpload } from "./upload";
 
 export interface ReferenceRuntime {
   db: Database;
@@ -37,6 +40,13 @@ export interface ReferenceRuntime {
   fetchImpl?: typeof fetch;
   /** AI provider for assisted guideline extraction; defaults to the configured one. */
   ai?: AIProvider;
+  /** Tests only: called after each stored batch of a content document. */
+  afterDocumentBatch?: (documentId: string, blocksStored: number) => Promise<void>;
+  /** Tests only: called after each stored batch of a Figma read. */
+  afterReferenceBatch?: (referenceId: string) => Promise<void>;
+  /** Tests only: response cap in bytes (instead of FIGMA_MAX_RESPONSE_MB) and backoff step. */
+  figmaMaxBytes?: number;
+  figmaRetryBaseMs?: number;
 }
 
 const EXTRACTION_TIMEOUT_MS = 60_000;
@@ -73,6 +83,12 @@ async function assistGuideline(
       })),
       doc,
       AbortSignal.timeout(AI_GUIDELINE_TIMEOUT_MS),
+      {
+        maxInputChars: Math.max(
+          2_000,
+          rt.config.AI_MAX_INPUT_TOKENS * CHARS_PER_TOKEN_ESTIMATE - GUIDELINE_SYSTEM_PROMPT.length,
+        ),
+      },
     );
     if (!result)
       return {
@@ -86,6 +102,7 @@ async function assistGuideline(
         model: result.model,
         status: "completed",
         linesSent: result.linesSent,
+        relevantLines: result.relevantLines,
         accepted: result.accepted.length,
         rejected: result.rejected.length,
         inputTokens: result.usage.inputTokens,
@@ -100,65 +117,22 @@ async function assistGuideline(
   }
 }
 
-type ContentDocument = NonNullable<Awaited<ReturnType<typeof contentRepo.claimNextDocument>>>;
 type ReferenceSource = NonNullable<Awaited<ReturnType<typeof referencesRepo.claimNextReference>>>;
 
-/** Reads a stored upload and re-validates it (the worker never trusts the web tier's check). */
+/** Reads a stored upload, re-validates it, and extracts it whole in an isolated thread. */
 async function readValidated(rt: ReferenceRuntime, storageKey: string, filename: string) {
-  let bytes: Buffer;
-  try {
-    bytes = await rt.storage.read(storageKey);
-  } catch {
-    throw new ExtractionError("The uploaded file is missing from storage. Upload it again.");
-  }
-  const check = validateDocumentUpload({
-    filename,
-    bytes,
-    limits: { maxBytes: rt.config.MAX_UPLOAD_MB * 1024 * 1024 },
+  const { kind, bytes } = await readUpload(rt, storageKey, filename);
+  return extractInIsolation(kind, bytes, {
+    timeoutMs: EXTRACTION_TIMEOUT_MS,
+    maxMemoryMb: rt.config.DOCUMENT_PARSER_MEMORY_MB,
+    maxBlocks: rt.config.DOCUMENT_MAX_BLOCKS,
   });
-  if (!check.ok) throw new ExtractionError(check.message);
-  // Prove the archive's declared sizes before a parser decompresses anything (zip bombs).
-  const content = await verifyDocumentContent({ kind: check.kind, bytes });
-  if (content) throw new ExtractionError(content.message);
-  // Parsers run in a worker thread with a heap limit and a hard time limit.
-  return extractInIsolation(check.kind, bytes, { timeoutMs: EXTRACTION_TIMEOUT_MS });
 }
 
 const failureMessage = (err: unknown) =>
   err instanceof ExtractionError || err instanceof FigmaError
     ? err.message
     : `Unexpected error while processing: ${publicErrorMessage(err)}`;
-
-/** Parses a content document into blocks. */
-export async function processDocument(rt: ReferenceRuntime, doc: ContentDocument) {
-  const log = rt.log.child({ documentId: doc.id, projectId: doc.projectId });
-  const started = Date.now();
-  try {
-    const result = await readValidated(rt, doc.storageKey, doc.filename);
-    await contentRepo.completeDocument(
-      rt.db,
-      doc.id,
-      result.blocks.map((b) => ({
-        type: b.type,
-        level: b.level,
-        text: b.text,
-        normalizedText: b.normalizedText,
-        href: b.href,
-        pageHint: b.pageHint,
-        location: b.location as unknown as Record<string, unknown>,
-      })),
-      { ...result.meta, extractedAt: new Date().toISOString() },
-    );
-    log.info(
-      { blocks: result.blocks.length, durationMs: Date.now() - started },
-      "content document parsed",
-    );
-  } catch (err) {
-    if (!(err instanceof ExtractionError)) log.error(errorFields(err), "content document failed");
-    else log.warn({ reason: err.message }, "content document could not be parsed");
-    await contentRepo.failDocument(rt.db, doc.id, failureMessage(err));
-  }
-}
 
 /** The project's own Figma token (encrypted) takes precedence over FIGMA_ACCESS_TOKEN. */
 async function figmaToken(rt: ReferenceRuntime, projectId: string): Promise<string | null> {
@@ -192,43 +166,7 @@ export async function processReference(rt: ReferenceRuntime, ref: ReferenceSourc
         });
         return;
       }
-      const file = await fetchFigmaFile({
-        fileKey: ref.figmaFileKey!,
-        nodeIds: ref.figmaNodeIds ?? [],
-        token,
-        baseUrl: rt.figmaBaseUrl,
-        fetchImpl: rt.fetchImpl,
-      });
-      const { spec, report } = normalizeFigma(file, ref.figmaFileKey!);
-      const draft = countSpecValues(spec)
-        ? await designSpecsRepo.upsertDraftFromExtraction(rt.db, ref.projectId, spec, {
-            origin: "figma",
-            referenceSourceId: ref.id,
-          })
-        : null;
-      await referencesRepo.completeReference(rt.db, ref.id, {
-        status: "ready",
-        meta: {
-          ...previous,
-          fileName: file.name,
-          lastModified: file.lastModified,
-          version: file.version,
-          valuesFound: countSpecValues(spec),
-          extracted: report.extracted.slice(0, 100),
-          skipped: report.skipped.slice(0, 100),
-          stats: report.stats,
-          draftVersion: draft?.version ?? null,
-          note: countSpecValues(spec)
-            ? draft
-              ? null
-              : "No new values compared with the active design reference."
-            : "No design values found: the file has no local text or color styles, Button components or Container frame.",
-        },
-      });
-      log.info(
-        { values: countSpecValues(spec), draft: draft?.version ?? null },
-        "figma reference processed",
-      );
+      await processFigmaReference(rt, ref, token, log);
       return;
     }
     if (ref.kind === "guideline_document") {
@@ -268,8 +206,10 @@ export async function processReference(rt: ReferenceRuntime, ref: ReferenceSourc
           ...previous,
           pages: result.meta.pages ?? null,
           valuesFound: values,
-          extracted: report.extracted.slice(0, 100),
-          skipped: report.skipped.slice(0, 100),
+          extracted: report.extracted.slice(0, 1_000),
+          skipped: report.skipped.slice(0, 1_000),
+          extractedTotal: report.extracted.length,
+          skippedTotal: report.skipped.length,
           draftVersion: draft?.version ?? null,
           ai: assisted?.meta ?? null,
           note: values
@@ -309,5 +249,13 @@ export async function processNextReferenceJob(rt: ReferenceRuntime): Promise<boo
     await processReference(rt, ref);
     return true;
   }
+  // Lowest priority: building missing retrieval indexes of parsed documents.
+  const indexing = await contentRepo.claimNextIndexing(rt.db);
+  if (indexing) {
+    await processIndexingJob(rt, indexing);
+    return true;
+  }
   return false;
 }
+
+export { processDocument };

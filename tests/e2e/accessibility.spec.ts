@@ -88,7 +88,7 @@ test.describe("signed-in pages", () => {
     await page.getByLabel("Project name").fill("Wizard a11y");
     await page.getByLabel("Website URL").fill("example.com");
     await page.getByRole("button", { name: "Continue" }).click();
-    await expect(page.getByRole("heading", { name: /Step 2 of 6/ })).toBeFocused();
+    await expect(page.getByRole("heading", { name: /Step 2 of 5/ })).toBeFocused();
     const result = await new AxeBuilder({ page }).withTags(TAGS).analyze();
     expect(
       result.violations.filter((v) => v.impact === "serious" || v.impact === "critical"),

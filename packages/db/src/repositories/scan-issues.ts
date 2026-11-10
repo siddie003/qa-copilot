@@ -1,4 +1,5 @@
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import type { AiExplanation } from "@qa/core/fix-guide";
 import type { Database } from "../client";
 import {
   aiRun,
@@ -101,6 +102,7 @@ export interface NewScanIssue {
   expected: string | null;
   actual: string | null;
   recommendation: string;
+  explanation?: AiExplanation | null;
   confidence: number;
   verdict: Verdict;
   /** Status for a new track (existing tracks keep user-set statuses). */
@@ -291,6 +293,7 @@ export async function materializeScanIssues(db: Database, scanId: string, issues
           expected: i.expected,
           actual: i.actual,
           recommendation: i.recommendation,
+          explanation: i.explanation ?? null,
           confidence: i.confidence,
           verdict: i.verdict,
           origin: i.origin,
@@ -343,6 +346,7 @@ export async function listScanIssues(db: Database, ownerId: string, scanId: stri
       expected: issue.expected,
       actual: issue.actual,
       recommendation: issue.recommendation,
+      explanation: issue.explanation,
       confidence: issue.confidence,
       verdict: issue.verdict,
       origin: issue.origin,

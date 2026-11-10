@@ -1,13 +1,17 @@
 import type { z } from "zod";
 
-export type AIProviderId = "anthropic" | "openai-compatible" | "none";
+export type AIProviderId = "anthropic" | "openai-compatible" | "gemini" | "groq" | "none";
 
 export type AIErrorCode =
   | "not_configured"
   | "auth"
   | "not_found"
   | "bad_request"
+  /** The request is larger than the provider (or its per-minute token budget) accepts. */
+  | "too_large"
   | "rate_limit"
+  /** A daily or billing quota is used up; waiting seconds will not help. */
+  | "quota_exhausted"
   | "unavailable"
   | "timeout"
   | "network"
@@ -16,12 +20,17 @@ export type AIErrorCode =
   | "truncated"
   | "invalid_output";
 
-/** Errors after which every further request would fail the same way (configuration problems). */
+/**
+ * Errors after which every further request would fail the same way (configuration problems or
+ * an exhausted quota), so the remaining requests of a run are not sent.
+ */
 export const FATAL_AI_ERRORS: ReadonlySet<AIErrorCode> = new Set([
   "not_configured",
   "auth",
   "not_found",
   "bad_request",
+  "too_large",
+  "quota_exhausted",
 ]);
 
 export interface AIUsage {
@@ -71,6 +80,8 @@ export interface StructuredResult<T> {
   latencyMs: number;
   stopReason: string | null;
   fallbackUsed: boolean;
+  /** HTTP attempts made, including retries (providers that retry themselves report 1). */
+  attempts?: number;
 }
 
 export interface AIProvider {
@@ -81,11 +92,17 @@ export interface AIProvider {
   generateStructured<T>(req: StructuredRequest<T>): Promise<StructuredResult<T>>;
 }
 
+/** Removes a Markdown code fence around a JSON answer (some models add one in JSON mode). */
+export function stripJsonFence(text: string): string {
+  const m = /^\s*```(?:json)?\s*\n([\s\S]*?)\n?\s*```\s*$/i.exec(text);
+  return m ? m[1]! : text;
+}
+
 /** Parses and validates a JSON response; the response text is never included in errors. */
 export function parseStructured<T>(text: string, schema: z.ZodType<T>, usage: AIUsage | null): T {
   let raw: unknown;
   try {
-    raw = JSON.parse(text);
+    raw = JSON.parse(stripJsonFence(text));
   } catch {
     throw new AIProviderError(
       "invalid_output",

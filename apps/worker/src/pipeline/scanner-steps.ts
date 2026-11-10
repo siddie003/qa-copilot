@@ -1,4 +1,4 @@
-import { errorFields, publicErrorMessage, type Logger } from "@qa/core";
+import { errorFields, publicErrorMessage, type Logger, type ScanFontReference } from "@qa/core";
 import type { FetchOptions, RobotsRules } from "@qa/crawler";
 import { normalizeUrl } from "@qa/crawler";
 import { pipelineRepo, type Database } from "@qa/db";
@@ -37,6 +37,10 @@ export interface ScannerEnv {
   pageTimeoutMs: number;
   /** Design spec and content documents frozen into the scan. */
   references: ScanReferences;
+  /** Scanner limits (accessibility page cap); the step deadline is added per step. */
+  limits?: ScannerContext["limits"];
+  /** Brand font files frozen into the scan. */
+  approvedFonts?: ScanFontReference[];
   /** Guarded browser context (policy + credentials) for one viewport. */
   openContext(viewport: {
     name: string;
@@ -78,6 +82,7 @@ export async function buildScannerContext(env: ScannerEnv): Promise<ScannerConte
     finalUrl: p.finalUrl,
     httpStatus: p.httpStatus,
     depth: p.depth,
+    origin: p.origin,
     title: p.title,
     contentType: p.contentType,
     crawlError: p.crawlError,
@@ -110,6 +115,7 @@ export async function buildScannerContext(env: ScannerEnv): Promise<ScannerConte
         loadDom: readText(env.storage, c.domSnapshotKey),
         loadDesignStyles: readJson(env.storage, c.computedStylesKey),
         loadTextContent: readJson(env.storage, c.textContentKey),
+        loadQuality: readJson(env.storage, c.qualityKey),
       })),
   }));
 
@@ -123,6 +129,9 @@ export async function buildScannerContext(env: ScannerEnv): Promise<ScannerConte
     signal: env.signal,
     pageTimeoutMs: env.pageTimeoutMs,
     references: env.references,
+    ...(env.limits ? { limits: env.limits } : {}),
+    approvedFonts: env.approvedFonts ?? [],
+    stepResult: (stepKey) => pipelineRepo.getStepResult(env.db, env.scanId, stepKey),
     log: (msg, data) => env.log.info(data ?? {}, msg),
     async openPage(url, viewport): Promise<LivePage> {
       const { context } = await env.openContext(viewport);
@@ -241,6 +250,7 @@ export async function runScannerStep(
       inconclusiveTotal: result.checks.inconclusive.length,
       notes: result.checks.notes ?? [],
       ...(result.checks.comparison ? { comparison: result.checks.comparison } : {}),
+      ...(result.checks.parts ? { parts: result.checks.parts } : {}),
     },
   };
 }

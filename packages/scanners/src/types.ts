@@ -1,4 +1,4 @@
-import type { ComparisonKey, DesignSpec, ScannerKey, Severity } from "@qa/core";
+import type { ComparisonKey, DesignSpec, ScanFontReference, ScannerKey, Severity } from "@qa/core";
 import type { FetchOptions, RobotsRules } from "@qa/crawler";
 import type { Page as PwPage } from "playwright";
 import { z } from "zod";
@@ -64,6 +64,28 @@ export interface CheckSummary {
   notes?: string[];
   /** Reference comparisons (design, content): every compared item with its verdict. */
   comparison?: ComparisonSummary;
+  /**
+   * Scanners made of several independent parts (Design Quality): what each part did, so a part
+   * that could not run is reported separately instead of hiding behind the overall status.
+   */
+  parts?: CheckPart[];
+}
+
+export interface CheckPart {
+  key: string;
+  label: string;
+  /** not_configured: the input it needs (e.g. approved content) was not provided. */
+  status: "completed" | "inconclusive" | "not_configured" | "unavailable" | "failed";
+  detail: string;
+}
+
+/** A previous step's stored outcome (scanner_run row), for steps that cross-reference it. */
+export interface StepResultRecord {
+  status: string;
+  statusReason: string | null;
+  error: string | null;
+  findingCount: number;
+  checks: Record<string, unknown> | null;
 }
 
 export type ComparisonVerdict =
@@ -128,6 +150,8 @@ export interface CaptureRecord {
   loadDesignStyles(): Promise<Record<string, unknown> | null>;
   /** Visible text blocks and links (only captured when the scan has content documents). */
   loadTextContent(): Promise<Record<string, unknown> | null>;
+  /** Design Quality measurements (only captured when that scanner is selected). */
+  loadQuality(): Promise<Record<string, unknown> | null>;
 }
 
 export interface PageRecord {
@@ -136,6 +160,8 @@ export interface PageRecord {
   finalUrl: string | null;
   httpStatus: number | null;
   depth: number;
+  /** "user" for pages from the project's page links, "crawl" otherwise. */
+  origin?: string;
   title: string | null;
   contentType: string | null;
   crawlError: string | null;
@@ -171,6 +197,8 @@ export interface ScanReferences {
       filename: string;
       targetPath: string | null;
       blocks: ContentBlockRecord[];
+      /** What of a partially read document was not read (its content is not compared). */
+      coverageNote?: string | null;
     }>;
     /** Documents frozen into the scan that were deleted before the comparison ran. */
     missing: string[];
@@ -193,6 +221,15 @@ export interface ScannerContext {
   pageTimeoutMs: number;
   log: (msg: string, data?: Record<string, unknown>) => void;
   references: ScanReferences;
+  /**
+   * Run limits: the accessibility scanner's page cap (default 25 when absent) and the step's soft
+   * deadline (epoch ms) after which page-by-page scanners stop starting new pages.
+   */
+  limits?: { accessibilityMaxPages?: number; deadline?: number };
+  /** Brand font files frozen into the scan (Design Quality). */
+  approvedFonts?: ScanFontReference[];
+  /** Reads the stored outcome of an earlier step of this scan (null when it has no row). */
+  stepResult?(stepKey: string): Promise<StepResultRecord | null>;
 }
 
 export interface Scanner {

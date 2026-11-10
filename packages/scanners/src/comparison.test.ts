@@ -60,6 +60,7 @@ function capture(
     loadDom: async () => null,
     loadDesignStyles: async () => design as Record<string, unknown> | null,
     loadTextContent: async () => text as Record<string, unknown> | null,
+    loadQuality: async () => null,
     ...rest,
   };
 }
@@ -460,6 +461,38 @@ describe("content comparison", () => {
     });
     expect(r.checks.inconclusive[0]!.reason).toMatch(/Careers/);
     for (const f of r.findings) expect(findingDraftSchema.safeParse(f).success).toBe(true);
+    // Each document finding names its source block (for retrieving the approved section).
+    expect(r.findings[1]!.evidence.find((e) => e.kind === "document")!.data).toMatchObject({
+      documentId: "doc1",
+      blockOrder: 4,
+    });
+  });
+
+  it("states what a partially read document did not cover (not reported as missing)", async () => {
+    const r = await contentScanner.run(
+      ctx(site, {
+        designSpec: null,
+        content: {
+          documents: [
+            {
+              id: "doc2",
+              filename: "handbook.pdf",
+              targetPath: "/about",
+              blocks: [block(0, "paragraph", "We sell demo products")],
+              coverageNote: "3 image-only page(s) (40–42) could not be read without OCR.",
+            },
+          ],
+          missing: [],
+        },
+      }),
+    );
+    expect(r.checks.inconclusive).toContainEqual({
+      check: "Document handbook.pdf",
+      reason:
+        "Only partly read: 3 image-only page(s) (40–42) could not be read without OCR. That content was not compared.",
+      pageUrl: null,
+    });
+    expect(r.findings).toHaveLength(0);
   });
 
   it("plans comparison steps only when references exist", () => {

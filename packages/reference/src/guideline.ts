@@ -77,6 +77,22 @@ function hexOf(text: string): string | null {
 const FONT_LINE =
   /\b(primary|heading|headline|display|body|text)?\s*(?:font(?:\s*family)?|typeface)\s*[:\-–—]\s*["“]?([A-Za-z][A-Za-z0-9 ]{1,40}?)["”]?\s*(?:[,;(]|$)/i;
 
+/**
+ * Lines written one after another without a blank line end up in one paragraph block, with
+ * spaces instead of line breaks ("H1 — Inter Bold, 48px H2 — Inter, 32px"). Split such blocks
+ * where a typography role ("H2 —", "Body:") or a font declaration ("Primary font:") starts, so
+ * each value line is read on its own. A role word must be followed by a separator to count.
+ */
+const SEGMENT_START =
+  /(?<!\b(?:primary|secondary|heading|headline|display|body|text))\s+(?=(?:h[1-6]|heading\s*[1-6]|headline\s*[1-6]|body(?:\s*(?:text|copy))?|paragraph(?:\s*text)?|links?|buttons?(?:\s*text)?)\s*[:\-–—|]\s|(?:(?:primary|secondary|heading|headline|display|body|text)\s+)?(?:font(?:\s*family)?|typeface)\s*[:\-–—])/i;
+
+export function guidelineSegments(text: string): string[] {
+  return text
+    .split(new RegExp(SEGMENT_START.source, "gi"))
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
 export function extractGuidelineDraft(
   blocks: ExtractedBlock[],
   doc: { referenceId: string; filename: string },
@@ -95,87 +111,90 @@ export function extractGuidelineDraft(
     excerpt: excerpt.slice(0, 300),
   });
 
-  for (const b of blocks) {
-    const line = b.text;
-    // Global font declarations: "Primary font: Inter", "Heading typeface – Playfair Display".
-    const font = line.match(FONT_LINE);
-    if (font && !ROLE_PREFIX.test(line)) {
-      families.push({
-        scope: (font[1] ?? "primary").toLowerCase(),
-        family: font[2]!.trim(),
-        source: sourceFor(b, line),
-      });
-      report.extracted.push(`font “${font[2]!.trim()}” (${font[1] ?? "primary"})`);
-      continue;
-    }
-
-    // Typography lines: "H1 — Playfair Display Bold, 48px / 56px".
-    const prefix = line.match(ROLE_PREFIX);
-    const role = prefix ? roleFrom(prefix[1]!) : null;
-    if (role && /\d\s*(px|pt)\b|#[0-9a-f]{3,6}\b|\b(bold|regular|light|medium)\b/i.test(line)) {
-      const rest = line.slice(prefix![0].length);
-      const sizes = [...rest.matchAll(/(\d+(?:\.\d+)?)\s*(px|pt)\b/gi)];
-      const token: TypographyToken = { source: sourceFor(b, line) };
-      const lh = rest.match(/(?:\/|line[\s-]?height\s*:?)\s*(\d+(?:\.\d+)?)\s*(px|pt)\b/i);
-      const ls = rest.match(
-        /(?:letter[\s-]?spacing|tracking)\s*:?\s*(-?\d+(?:\.\d+)?)\s*(px|pt)\b/i,
-      );
-      const first = sizes.find((s) => s.index !== lh?.index && s.index !== ls?.index);
-      if (first) token.fontSize = toPx(first[1]!, first[2]!);
-      if (lh) token.lineHeight = toPx(lh[1]!, lh[2]!);
-      if (ls) token.letterSpacing = toPx(ls[1]!, ls[2]!);
-      const w = weightOf(rest);
-      if (w) token.fontWeight = w;
-      const color = hexOf(rest);
-      if (color) token.color = color;
-      // Family = the words before the weight keyword or the first number.
-      const familyPart = rest
-        .split(/,|\(|\d|#/)[0]!
-        .replace(new RegExp(WEIGHTS.map(([re]) => re.source).join("|"), "gi"), "")
-        .replace(/\b(font|family|typeface|size|weight|text|style)\b/gi, "")
-        .trim();
-      if (/^[A-Za-z][A-Za-z ]{1,40}$/.test(familyPart)) token.fontFamily = familyPart;
-      if (Object.keys(token).length > 1) {
-        spec.typography[role] = { ...spec.typography[role], ...token };
-        report.extracted.push(`${role}: “${line.slice(0, 80)}”`);
-      } else report.skipped.push(`“${line.slice(0, 80)}”: no size, weight or color found`);
-      continue;
-    }
-
-    // Colors: every hex/rgb value with the label written before it.
-    const hexes = [...line.matchAll(HEX)];
-    const rgb = hexes.length ? null : line.match(RGB);
-    if (!hexes.length && !rgb) continue;
-    const entries = hexes.length
-      ? hexes.map((m, i) => ({
-          value: hexOf(m[0])!,
-          label: line.slice(i === 0 ? 0 : hexes[i - 1]!.index! + hexes[i - 1]![0].length, m.index),
-        }))
-      : [{ value: hexOf(rgb![0])!, label: line.slice(0, rgb!.index) }];
-    for (const e of entries) {
-      const label = e.label
-        .replace(/\b(hex|rgb|cmyk|pantone|color|colour)\b\s*:?/gi, " ")
-        .replace(/[:\-–—|=•,]+\s*$/, "")
-        .replace(/^[\s:\-–—|=•,]+/, "")
-        .trim();
-      const name = tokenName(label || `Color ${e.value.slice(1)}`, `Color ${e.value.slice(1)}`);
-      if (spec.colors[name]) {
-        report.skipped.push(`Color “${name}” appears more than once; the first value was kept`);
+  for (const b of blocks)
+    for (const line of guidelineSegments(b.text)) {
+      // Global font declarations: "Primary font: Inter", "Heading typeface – Playfair Display".
+      const font = line.match(FONT_LINE);
+      if (font && !ROLE_PREFIX.test(line)) {
+        families.push({
+          scope: (font[1] ?? "primary").toLowerCase(),
+          family: font[2]!.trim(),
+          source: sourceFor(b, line),
+        });
+        report.extracted.push(`font “${font[2]!.trim()}” (${font[1] ?? "primary"})`);
         continue;
       }
-      // Roles are read from the label as written ("Text color" → body text color).
-      const written = e.label.replace(/[:\-–—|=•,]+\s*$/, "").trim();
-      const role = written ? colorRoleForName(written) : null;
-      const assign = role && !usedRoles.has(role) ? role : undefined;
-      if (assign) usedRoles.add(assign);
-      spec.colors[name] = {
-        value: e.value,
-        ...(assign ? { role: assign } : {}),
-        source: sourceFor(b, line),
-      };
-      report.extracted.push(`color “${name}” ${e.value}${assign ? ` (${assign})` : ""}`);
+
+      // Typography lines: "H1 — Playfair Display Bold, 48px / 56px".
+      const prefix = line.match(ROLE_PREFIX);
+      const role = prefix ? roleFrom(prefix[1]!) : null;
+      if (role && /\d\s*(px|pt)\b|#[0-9a-f]{3,6}\b|\b(bold|regular|light|medium)\b/i.test(line)) {
+        const rest = line.slice(prefix![0].length);
+        const sizes = [...rest.matchAll(/(\d+(?:\.\d+)?)\s*(px|pt)\b/gi)];
+        const token: TypographyToken = { source: sourceFor(b, line) };
+        const lh = rest.match(/(?:\/|line[\s-]?height\s*:?)\s*(\d+(?:\.\d+)?)\s*(px|pt)\b/i);
+        const ls = rest.match(
+          /(?:letter[\s-]?spacing|tracking)\s*:?\s*(-?\d+(?:\.\d+)?)\s*(px|pt)\b/i,
+        );
+        const first = sizes.find((s) => s.index !== lh?.index && s.index !== ls?.index);
+        if (first) token.fontSize = toPx(first[1]!, first[2]!);
+        if (lh) token.lineHeight = toPx(lh[1]!, lh[2]!);
+        if (ls) token.letterSpacing = toPx(ls[1]!, ls[2]!);
+        const w = weightOf(rest);
+        if (w) token.fontWeight = w;
+        const color = hexOf(rest);
+        if (color) token.color = color;
+        // Family = the words before the weight keyword or the first number.
+        const familyPart = rest
+          .split(/,|\(|\d|#/)[0]!
+          .replace(new RegExp(WEIGHTS.map(([re]) => re.source).join("|"), "gi"), "")
+          .replace(/\b(font|family|typeface|size|weight|text|style)\b/gi, "")
+          .trim();
+        if (/^[A-Za-z][A-Za-z ]{1,40}$/.test(familyPart)) token.fontFamily = familyPart;
+        if (Object.keys(token).length > 1) {
+          spec.typography[role] = { ...spec.typography[role], ...token };
+          report.extracted.push(`${role}: “${line.slice(0, 80)}”`);
+        } else report.skipped.push(`“${line.slice(0, 80)}”: no size, weight or color found`);
+        continue;
+      }
+
+      // Colors: every hex/rgb value with the label written before it.
+      const hexes = [...line.matchAll(HEX)];
+      const rgb = hexes.length ? null : line.match(RGB);
+      if (!hexes.length && !rgb) continue;
+      const entries = hexes.length
+        ? hexes.map((m, i) => ({
+            value: hexOf(m[0])!,
+            label: line.slice(
+              i === 0 ? 0 : hexes[i - 1]!.index! + hexes[i - 1]![0].length,
+              m.index,
+            ),
+          }))
+        : [{ value: hexOf(rgb![0])!, label: line.slice(0, rgb!.index) }];
+      for (const e of entries) {
+        const label = e.label
+          .replace(/\b(hex|rgb|cmyk|pantone|color|colour)\b\s*:?/gi, " ")
+          .replace(/[:\-–—|=•,]+\s*$/, "")
+          .replace(/^[\s:\-–—|=•,]+/, "")
+          .trim();
+        const name = tokenName(label || `Color ${e.value.slice(1)}`, `Color ${e.value.slice(1)}`);
+        if (spec.colors[name]) {
+          report.skipped.push(`Color “${name}” appears more than once; the first value was kept`);
+          continue;
+        }
+        // Roles are read from the label as written ("Text color" → body text color).
+        const written = e.label.replace(/[:\-–—|=•,]+\s*$/, "").trim();
+        const role = written ? colorRoleForName(written) : null;
+        const assign = role && !usedRoles.has(role) ? role : undefined;
+        if (assign) usedRoles.add(assign);
+        spec.colors[name] = {
+          value: e.value,
+          ...(assign ? { role: assign } : {}),
+          source: sourceFor(b, line),
+        };
+        report.extracted.push(`color “${name}” ${e.value}${assign ? ` (${assign})` : ""}`);
+      }
     }
-  }
 
   // Apply global font families to roles that have no family of their own.
   for (const f of families) {

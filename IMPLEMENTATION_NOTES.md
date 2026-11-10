@@ -461,6 +461,368 @@
   without sign-ups). Its first run found a WCAG 2.2 target-size failure on scan pages with a
   content/design comparison step (stacked 16 px links); step links are now 24 px tall.
 
+## Phase 11 notes (enhancement baseline)
+- Full audit in `ENHANCEMENT_BASELINE.md`. Key facts for the next phases: there is **no Figma
+  page cap** (the 25-page limits are `SCAN_MAX_PAGES`' default and the accessibility scanner's
+  `MAX_PAGES`); Figma is one whole-file request with a 50 MB cap; approved-content comparison is
+  deterministic (no AI, no retrieval); documents are parsed all-or-nothing into ≤ 5000 blocks
+  with page/line/heading locations but no per-page coverage.
+- **Playwright e2e and `npm run smoke` use the development database** (`DATABASE_URL`; they create
+  and delete `@example.test` / throwaway accounts). Only vitest's integration project is pointed at
+  `TEST_DATABASE_URL`. Ask before running them while the dev database holds user data.
+- Do not run `next build` while a `next dev`/`next start` from this repository is running.
+- Agent shells: a stray `cat > file` without input blocks until the command times out; write
+  temporary scripts with the file tools (inside the workspace when they need workspace packages)
+  and delete them afterwards.
+
+## Phase 12 decisions (free-tier LLM)
+- **No new adapter for Gemini/Groq.** Both are presets of `OpenAICompatibleProvider` (fixed base
+  URLs `GEMINI_OPENAI_BASE_URL`, `GROQ_BASE_URL`; `id`/`label`/`apiKeyVariable` per preset) built
+  in `createAIProvider`. Tests inject `geminiBaseUrl`/`groqBaseUrl`/`retryBaseMs` via
+  `ProviderOverrides`. A native Gemini SDK was not added (no new dependency).
+- **Classification** (`classifyHttpError` + `parseErrorBody`, object or `[{error}]` bodies):
+  401/403 or `API_KEY_INVALID` → auth (Gemini answers 400 for bad keys); 413 → too_large;
+  429 → `quota_exhausted` when the text/quota ids say per-day/daily/TPD/RPD/`insufficient_quota`/
+  billing, else `rate_limit` (Google's per-minute message also mentions "plan and billing", so the
+  regexes require a quota-ish phrase; the quota id `…PerDay…` is the reliable signal); 400 with
+  `json_validate_failed`/"does not match the expected schema" → invalid_output (non-fatal);
+  408/5xx → unavailable. `FATAL_AI_ERRORS` gained `too_large` and `quota_exhausted`.
+- **Retries:** rate_limit/unavailable/network only; wait = Retry-After (seconds or HTTP date) or
+  Google `RetryInfo.retryDelay`, else full jitter `rand·min(30 s, base·2^n)`; a stated wait above
+  `AI_MAX_RETRY_WAIT_MS` ends the request (> 10 min → quota_exhausted). Waits use
+  `abortableSleep` on the request's deadline signal (cancellation/budget end them at once).
+- **Pacing** (`providers/pacing.ts`): rolling 60 s window per process, shared per
+  provider+model+limits (`sharedPacer`), FIFO admission, estimate = body chars / 3 +
+  `AI_MAX_OUTPUT_TOKENS`, replaced by reported `total_tokens` after the answer; a single request
+  above the TPM budget throws `too_large` before sending. Multiple worker processes do not share it.
+- **Batch size:** worker computes `maxChars = AI_MAX_INPUT_TOKENS·3 − SYSTEM_PROMPT.length`
+  (≥ 2000; default 20000 tokens ≈ the old 60 000-char constant). A single group above it is a
+  batch with `oversize: true` → skipped `too_large_input` (keeps scanner wording).
+- **json_object mode** appends the JSON Schema to the system prompt; `parseStructured` strips a
+  Markdown code fence before `JSON.parse`; zod validation is unchanged.
+- **Temperature:** `AI_TEMPERATURE` became optional; `openai-compatible` keeps 0, presets omit it
+  (Google recommends Gemini 3's default). `AI_EFFORT` → `reasoning_effort` (xhigh/max → high).
+- **Data minimization:** `scrubSecrets` (prompt.ts) on every string of the group input, titles,
+  page URLs and guideline lines: key/token patterns and credential-like query-parameter values.
+  The grounding corpus still uses the unscrubbed evidence (an AI quoting a scrubbed value simply
+  fails that fact check).
+- `describeConfig` adds `aiLimits` and `aiDataNotice` (provider terms as of 2026-10-09; wording
+  points to the terms). `ai:check` = `apps/worker/src/scripts/ai-check.ts` → `checkAIProvider`
+  (packages/ai/src/health.ts); the web bundle still never imports `@qa/ai`.
+
+## Phase 13 decisions (large documents)
+- **Job model unchanged, finer state.** `content_document.parse_status` stays the queue
+  (`pending → parsing → parsed | failed | cancelled`); `stage` (extracting/indexing) and `outcome`
+  (completed / completed_with_warnings / partial) are separate columns, `documentState()` in
+  `@qa/core/content` maps them to the UI states. `coverage` (jsonb, `DocumentCoverage`) and
+  `checkpoint` (jsonb `{ extractorVersion, pdf: PdfState }`) are written with every batch in one
+  transaction with its blocks (`appendDocumentBatch`), so a resumed run can trust them.
+- **Streaming thread protocol** (`thread-entry.mjs`): `start {totalPages}` → `batch` × n → `done`
+  | `error`. `extractStreamInIsolation` serializes `onBatch` calls; after an abort (cancel or lost
+  run) queued batches are skipped and the result is `cancelled` even if `done` already arrived (a
+  test caught the case where it reported `done` with batches skipped). Batches before a time or
+  memory stop are kept (`time_limit` / `stopped`); with no batch it is an `ExtractionError` as
+  before. `extractInIsolation` (guideline documents) collects all batches.
+- **PDF:** `openPdf` wraps pdf.js (`getDocumentProxy`, per-page `getTextContent` + `cleanup`,
+  `getOperatorList` image ops for pages without text, `loadingTask.destroy`). `PdfPageSource` is an
+  interface so tests can inject a failing page. Body size from the first `PDF_SAMPLE_PAGES` (30)
+  pages; heading sizes accumulate; `BlockCollector` takes/returns `CollectorState` (next index,
+  page marker, heading path) and `drain()`s per batch. Block order = `location.index` (global).
+- **Resume rules:** only PDFs with the same `EXTRACTOR_VERSION` ("2"); `prepareDocumentRun`
+  deletes blocks with `order >= checkpoint.nextIndex` and all chunks; DOCX/MD/TXT start over.
+  `recoverStaleDocuments` → pending while `attempts < 3` (cancel-requested stale runs →
+  cancelled), else failed; stale `indexing` of parsed docs → released. A heartbeat every 5 s
+  refreshes `processing_started_at` and reads `cancel_requested_at`; a missing row means the run
+  lost the document (stop writing).
+- **Indexing** is a stage of processing and also a lowest-priority job (`claimNextIndexing`: parsed,
+  `chunk_count = 0`, blocks > 0) for documents parsed before chunking existed. A failed indexing
+  job keeps `stage = 'indexing'` until stale recovery (5 min) to avoid a hot retry loop.
+  Do not pass huge numbers to integer columns (an overflow was the first indexing bug).
+- **Search:** `searchTerms()` (core, browser-safe: letters/digits ≥ 3 chars, stopwords removed,
+  longest first) → `to_tsquery('simple', …)`; `searchChunks` tries all words (`&`) then any word
+  (`|`). The tsvector is a generated column over `coalesce(heading_text,'') || ' ' || text`.
+- **AI context:** content evidence carries `documentId` + `blockOrder`; `attachApprovedSections`
+  (issue-steps) loads the containing chunks (`chunksForBlocks`), ≤ 2 per group; `groupInput` sends
+  `approvedSections` bounded to 800 chars after `scrubSecrets`; `issueCorpus` includes the full
+  section text. `PROMPT_VERSION` → `issues-2026-10-09` (rules 3 and 7 mention approvedSections).
+- **Scans:** `ScanContentDocument` gained `outcome` and `coverageNote`; `loadReferences` filters
+  blocks to `order < blockCount` (frozen size); the content scanner adds an inconclusive check per
+  partial document. Snapshot hash appends `:blockCount` only for partial documents (complete
+  documents keep their old hash, so older scans stay comparable).
+- **Dev database:** migration 0007 was applied to the development database on 2026-10-09 (backup
+  taken first with `pg_dump -Fc` into the session scratchpad); its 13 documents were then indexed
+  by the running worker (98 sections).
+- **Test hook:** `ReferenceRuntime.afterDocumentBatch` (tests only) makes cancellation and crash
+  tests deterministic.
+- Agent shells: inline `node -e` scripts containing template literals break in bash double quotes;
+  use the Edit tool or a script file (written with the Write tool) instead.
+
+## Phase 14 decisions (Figma multi-page)
+- **Quota first.** Figma Tier 1 (GET file / GET nodes) is the scarce resource (View/Collab seats:
+  up to 20 per month). Order: `meta` (Tier 3) → skip if `prev.complete && prev.version ===
+  meta.version` and the same kind of read → whole file (1 request) unless the previous read was
+  page mode → else `depth=1` + `nodes` batches. Meta failures (403 scope, rate limit, network) are
+  warnings; meta 404 is fatal (the file would 404 anyway).
+- **`readFigmaReference`** (`packages/reference/src/figma/pages.ts`) is the orchestrator; it is pure
+  apart from the client and an `onProgress(manifest, checkpoint) → continue?` callback the worker
+  uses to persist after the page list and every batch (and to stop on cancel). It clones the
+  incoming checkpoint. Results: `unchanged` | `done` | `stopped` (RATE_LIMITED, NETWORK,
+  SERVER_ERROR outside a batch, CANCELLED) with a checkpoint.
+- **Batches:** `nodes?ids=…&version=<from depth=1>`; TOO_LARGE or SERVER_ERROR on several pages →
+  split in halves (batch size remembered for later batches); on one page → that page `failed`.
+  Null node entries → `failed` ("not returned for this version"). A stop inside a split batch
+  keeps the pages already done (pending = manifest pages still pending).
+- **Normalizer:** `collectFigma(state, root, styles)` records the first node per style with its
+  values (not node references), buttons with their computed token, the first container frame;
+  `finalizeFigma(state, key)` builds the spec/report exactly as before (`normalizeFigma` = collect
+  all roots + finalize; existing tests unchanged). Style metadata merges from the whole-file,
+  depth=1 and per-node `styles`.
+- **Worker** (`apps/worker/src/references/figma.ts`): heartbeat 5 s (lost → stop writing; cancel →
+  abort client), outcome rules: stopped + 0 pages done → `failed` (checkpoint kept if pages
+  pending); stopped with pages → `ready/partial` with a draft from the pages read + checkpoint;
+  pages failed → `partial`; warnings → `completed_with_warnings`; FigmaError otherwise → `failed`,
+  checkpoint cleared; CANCELLED → `cancelled` with checkpoint. Unchanged → `ready`, previous
+  outcome kept, note "unchanged".
+- `reference_source`: `outcome`, `manifest`, `checkpoint`, `attempts`, `cancel_requested_at`
+  (migration 0008; status enum + `cancelled`). `claimNextReference` increments attempts;
+  `recoverStaleReferences` cancels (if requested), re-queues (< 3 attempts) or fails.
+- The web layer strips `frames` from manifests sent to the browser (`getReferenceState`); the API
+  `GET /projects/:id/references` returns them. The checkpoint is never returned (not in columns).
+- **Accessibility cap:** `ScannerContext.limits = { accessibilityMaxPages, deadline }`; the worker
+  passes `SCAN_ACCESSIBILITY_MAX_PAGES || snapshot.maxPages` and, per step in `withSignal`, a
+  deadline at 80 % of `SCAN_SCANNER_TIMEOUT_MS`. Jobs after the deadline are not started and their
+  pages get the page-level "axe-core analysis" inconclusive check (so comparisons never count
+  their issues as resolved). Status counts exclude skipped combinations.
+- **Dev database:** migration 0008 applied 2026-10-09 after `pg_dump -Fc`
+  (`qa_copilot_before_0008.dump`, session scratchpad).
+- Test hooks: `ReferenceRuntime.afterReferenceBatch`, `figmaMaxBytes`, `figmaRetryBaseMs`.
+  Generated Figma files: `fixtures/figma/large-file.mjs` (`buildFigmaFile`, `figmaResponse`).
+
+## Phase 15 decisions (UI/UX, plain-language issues)
+- **Deterministic explanations, not new AI fields.** `packages/core/src/explain.ts` holds fixed
+  wording per rule (meaning, impact, optional manual check) plus category fallbacks; it never
+  contains issue facts (a unit test rejects digits and URLs in the category wording). Everything
+  specific on the page (pages, element, expected/found, counts, confidence, verdict, severity
+  rationale, fix text) is read from the stored occurrence. Reasons: works with `AI_PROVIDER=none`
+  (the current installation), needs no migration, cannot invent findings. The AI prompt was only
+  asked to write plain-language descriptions (shown under Technical details with their grounding
+  label); no new AI output fields, so grounding is unchanged.
+- **Coverage test:** `grouping.test.ts` asserts that every rule the scanners emit (and every design
+  rule) has a specific explanation, next to the existing remediation-catalog check. Unknown axe
+  rules get the category wording plus "General explanation for this kind of check".
+- **Never "verified":** the fix text is always labelled "not verified until a later scan confirms
+  it"; Resolved explains that only a later scan of the same pages confirms it (reopen rule from
+  Phase 9); the re-scan sentence names the comparison categories (Resolved vs Not rechecked).
+- **Plain view keeps long technical values out:** expected/found longer than 160 characters (e.g.
+  axe failure summaries) are only in Technical details.
+- **Website vs Figma:** `normalizeWebsiteUrl` (create, update, validate-url) refuses
+  `figma.com`/`*.figma.com` with field error code `figma_url`; the wizard checks the same on the
+  client and explains a non-Figma address in the Figma field. The Figma token warning appears only
+  for a well-formed Figma link and only when `FIGMA_ACCESS_TOKEN` is empty (a project token can be
+  added on the References page after creation).
+- **Issue list on phones:** a second, card-based rendering (`md:hidden`) shares the selection
+  state; the table is `hidden md:block`. Role-based e2e locators ignore the hidden copy.
+- **Browser testing without touching real data:** the app role cannot `CREATE DATABASE`, so the
+  disposable integration database `qa_copilot_test` was used: production build on port 3200 and
+  a worker on health port 3291 with `DATABASE_URL=TEST_DATABASE_URL`, a scratch `STORAGE_DIR` and
+  the test-only encryption key; Playwright e2e the same way (ports 3100/3191). Integration tests
+  truncate that database, so they never run at the same time as these servers.
+
+## Phase 16 decisions (final validation)
+- **Static CSP vs route CSP:** Next.js `headers()` *replaces* a route's header of the same name
+  (seen on the production build). `next.config.ts` therefore applies its static CSP to
+  `/:path((?!api/v1/artifacts/|api/v1/reports/[^/]+/download).*)` only; those routes keep
+  `default-src 'none'; …; sandbox; frame-ancestors 'none'`. Pages get the proxy's nonce policy,
+  other API routes the static one.
+- **Guideline segments:** `guidelineSegments()` splits a block before `H1–H6 / Heading n / Body /
+  Paragraph / Link / Button` followed by a separator (`: - – — |`) and before font declarations
+  (`Primary font:`), but never right after a scope word (`Primary` stays with `font:`). Each
+  segment cites the block (first line of the paragraph).
+- **Cancel check per step:** `runStep` calls `pipelineRepo.heartbeat` before starting (one UPDATE;
+  also detects a scan taken over elsewhere). Remaining window: a cancel arriving while the last
+  step runs cannot interrupt that step if it ends before the next heartbeat.
+- **Paging large lists:** findings page 100 per page; the page of a linked finding comes from the
+  ordered display ids (`listFindingDisplayIds`, cheap). The findings **API** still returns all
+  findings (unchanged contract; 7 MB for 6,625 findings). Compare page: 50 per category on the
+  overview, 200 per page per category; the comparison itself (and the API, 4.7 MB for 3,750
+  issues) is unchanged.
+- **Dependency audit (2026-10-09, `npm audit`):** production tree 7 moderate (mammoth → argparse →
+  sprintf-js, used by mammoth's CLI only; esbuild dev-server advisory via drizzle-kit, not run in
+  production); dev tree adds 5 high / 2 critical in ESLint's Next plugin (fast-glob → micromatch →
+  braces) and `concurrently` (shell-quote; only quotes the repo's own script names). Offered fixes
+  are breaking downgrades; nothing was changed — a decision for the owner.
+- **Performance data** was generated in `qa_copilot_test` by cloning a real scan's issues 124×
+  (3,750 tracks, 6,625 findings, 9,250 evidence rows) plus a second real scan; numbers in
+  `PROJECT_STATUS.md` → Phase 16 are local measurements on this Windows machine, not benchmarks.
+
+## Issue explanations (Phase 15 extension, 2026-10-11)
+- **One shared guide, built at render time.** `packages/core/src/fix-guide.ts`
+  (`@qa/core/fix-guide`, pure, browser-safe) turns a stored occurrence plus its findings'
+  evidence into: plain summary (problem / why it matters / next action), facts recorded by the
+  scan, numbered fix steps, before/after code examples, caveats, verification steps and "what the
+  scan could not tell". Built when the page renders, so all existing issues (no re-scan) get it.
+  Used by the issue page, the scan's issue list (compact summary) and all report formats.
+- **Grounding of the guide:** wording per rule is fixed text; every page, element, HTML snippet,
+  header, URL and measurement is read from the evidence. "Before" code is either copied from the
+  evidence (`observed`: axe `html`, `html_snippet`, `link_check.linkedFrom[].html`, recorded
+  header values) or a minimal form built from evidence values (`illustrative`). "After" code is
+  produced by small attribute edits on the recorded tag (`withAttribute`) and never completes a
+  truncated tag. What the scan cannot know (what an image shows, the page language, the right
+  link target, a cookie's value) is a `[placeholder]`. The only computed value is the
+  contrast-safe color (WCAG formula, labelled "calculated"). A unit test asserts that no guide
+  contains a URL that is not in its input (allowed: placeholders and the `https://schema.org`
+  JSON-LD vocabulary id).
+- **Context instead of one fix for everything:** image-alt offers informative / decorative /
+  only-content-of-a-link-or-button variants; the last is highlighted only when the selector shows
+  an `a`/`button` ancestor or the class name contains icon/nav/menu/button/logo words (phrased as
+  a hint). Platform tips (WordPress, Next.js `<Image>`, Shopify) appear only when the recorded
+  HTML or URLs show the platform. Header facts appear only for headers the evidence actually
+  recorded (`csp-unsafe-script` stores the directive, not the header — it is never reported as
+  "not sent"; frame protection reads `x-frame-options`). Cookie values are masked as `[value]`.
+  Links distinguish broken / temporary / redirect and warn that 401/403/429/999 may be bot
+  blocking. Performance facts are only the stored lab values and thresholds, with a lab caveat.
+  Security guides always state that a missing protection is not evidence of an attack.
+- **Coverage:** rule-specific guides for every rule the security, SEO, links, performance and
+  responsive scanners emit (asserted in `grouping.test.ts` against the emitted-rules list), for
+  design and content comparison, and for 23 common axe rules. Other axe rules use a general guide
+  built from the stored catalog guidance plus the axe evidence (WCAG criterion, impact, axe's own
+  summary, rule documentation link) and say that no rule-specific guide exists.
+- **Uncertain verdicts:** for potential / inconclusive issues the next action starts with "First
+  check whether the problem is real" and the gaps list the verdict meaning.
+- **Verification never marks anything fixed:** the steps end with a new scan and say that
+  marking an issue Resolved does not verify it; copying code only writes to the clipboard.
+- **AI explanation (optional, grounded):** the AI output schema gained `explanation`
+  (`problem`, `impact`, `nextStep`, `steps[]`, `caveats[]`). Parsing accepts it missing
+  (`nullish`) so older responses and models still work; the JSON schema sent to providers
+  requires it (nullable), because strict structured output needs every property listed.
+  Grounding runs the existing fact check per part: problem/impact/nextStep individually; steps
+  all-or-nothing (a partial list would read as complete); caveats one by one. Unsupported parts
+  are dropped and the built-in guide is shown for them; every check is stored (`field:explanation.*`)
+  and shown under Evidence validation. Code examples are never AI-written (the prompt says so and
+  the UI never renders AI code). The UI uses AI parts only when the issue's grounding status is
+  `passed` or `partial`, and labels them. `PROMPT_VERSION` `issues-2026-10-11-explain`.
+- **Storage:** nullable `issue.explanation jsonb` (migration `0009_issue_explanation`, additive).
+  Applied to the development database on 2026-10-11 after a `pg_dump -Fc` backup
+  (`qa_copilot_before_0009.dump`, 11.4 MB, session scratchpad); row counts unchanged.
+- **Output budget:** live Gemini runs used about 300–450 output tokens per issue; the explanation
+  adds an estimated 300–400, so a 10-issue batch stays well under `AI_MAX_OUTPUT_TOKENS=16000`. A
+  truncated batch fails safely (its issues keep the scanners' wording). Not yet measured live.
+- **Findings page (added after user feedback, 2026-10-11):** the user tested on the scan's raw
+  findings page, which still showed only scanner output. `FindingGuide` renders the guide for one
+  raw finding (category = the finding's scanner, no AI text — raw findings never carry any);
+  `LazyFindingGuide` (client) builds it when the row's `<details>` opens, because server-rendering
+  every guide doubled the page (1.56 MB vs 0.77 MB for 57 findings). Screenshot evidence is not
+  passed to the client. The technical block is a nested, closed `<details>`.
+- **Two levels on the issue page:** Level 1 cards (In plain language, Where it was found, How to
+  fix it, Example fix, How to verify the fix); Level 2 is a `<details id="technical">` holding
+  the unchanged technical cards plus "How reliable". It is closed by default and opens itself for
+  a `#fragment` inside it (`#evidence` links keep working).
+
+## Workflow redesign and Design Quality & Typography scanner (2026-10-13)
+Request: brand guidelines and font files in the first wizard step; content documents and multiple
+page links in "Figma / brand"; remove the separate Content step; a new selectable scanner
+"Design Quality & Typography" integrated across the whole scan lifecycle.
+
+- **Wizard** (`apps/web/src/app/(app)/projects/new/project-wizard.tsx`): five steps instead of
+  six — Project (name, website URL, brand guidelines [multi-file, ≤ 10], font files [≤ 20]) →
+  Figma / brand (Figma design URL, hand-entered design values, content documents with page
+  mapping, Page links with "+ Add page") → Configure scan → Review → Start scan. The old "Content"
+  step's code was moved, not hidden: same file validation, same `content-documents` API, same
+  per-file page mapping (now with a datalist of the added page links), same processing status on
+  the last step. No other part of the app used the step (the project area never had a Content tab;
+  its References page keeps the content panel).
+- **Uploads before the project exists:** files are only selected (validated in the browser) until
+  "Create project". The project is created first (with page links in the same request), then each
+  file is uploaded with real progress (`apiUploadWithProgress`, XMLHttpRequest upload events) and
+  its own status (waiting / uploading n% / uploaded / failed + Retry). If creation fails nothing
+  is stored and every entry and file stays in the form. Uploading before creation would need
+  orphan-file cleanup; the existing "create, then attach" pattern was kept.
+- **Page links:** table `project_page_link` (unique per project on a duplicate key = host without
+  `www.`, path without trailing slash, sorted query). Validation (`@qa/core/page-links`,
+  browser-safe, plus `validateWebsiteUrl` SSRF rules on the server): http(s), same site as the
+  project (as the crawler defines it), no credentials, not a Figma link, not a file. API
+  `GET/POST /projects/:id/page-links`, `DELETE …/:linkId`; `POST /projects` accepts `pageLinks`
+  (all-or-nothing: an invalid link rejects the request, errors at `pageLinks.<n>`). Scans freeze
+  the URLs into `configSnapshot.pageLinks`; the crawler visits them right after the start page as
+  `seed` items, outside `maxPages`/`maxDepth`, still subject to robots.txt and the network guard;
+  stored pages get `page.origin = 'user'` (others `'crawl'`); the crawl step's reason lists how
+  many loaded and each failure ("…/no-such-page – HTTP 404"); the Pages list marks them "Your
+  page link". Page links are **not mapped to Figma frames**: the design reference is a set of
+  values (tokens), not page layouts, so no correspondence is claimed; this is stated in the UI.
+- **Brand fonts:** table `project_font` (unique per project on sha256). `@qa/security/font`
+  validates extension, declared MIME type and file signature (`0x00010000`/`true`, `OTTO`, `wOFF`,
+  `wOF2`; `ttcf` collections refused), then reads the tables with bounds checks: WOFF tables are
+  inflated with `maxOutputLength`, WOFF2 is Brotli-decompressed with `maxOutputLength` (directory
+  with UIntBase128 lengths and the glyf/loca null-transform rule), `head` magic must be valid,
+  `name` (families 1/16, styles 2/17, full name 4, PostScript 6, version 5; Windows English
+  preferred), `OS/2` weight, fsSelection italic and fsType embedding bits, `maxp` glyph count,
+  `fvar` = variable font. A row exists only when this succeeded, so there is no "uploaded but not
+  processed" font state. Limit 10 MB (or `MAX_UPLOAD_MB` if lower). Fonts are never served or
+  injected into scanned pages; scans freeze only the names (`configSnapshot.approvedFonts`).
+  Verified on real files: Geist TTF and WOFF2 (Next.js, OFL), Arial, Segoe UI Variable.
+- **Duplicate uploads:** the same bytes cannot be uploaded twice to one project as a content
+  document, brand guideline or font (409 naming the existing file) — protects against a retried
+  wizard upload creating duplicate records.
+- **Scanner key `design_quality`** in `SCANNER_KEYS` (selectable in the wizard and project
+  settings, default on for new projects; existing projects keep their saved selection). It is a
+  "late" scanner (`LATE_SCANNERS` in `@qa/core/pipeline`): planned and run after the design and
+  content comparisons and before `ai`, because it reads their stored results
+  (`ScannerContext.stepResult`).
+- **Capture:** when the scanner is selected, every capture runs `DESIGN_QUALITY_SCRIPT`
+  (`packages/browser/src/quality-scripts.ts`, read-only): visible H1–H6 with computed font
+  family/size/weight/style/line height, whether inside header/nav/footer; ≤ 20 body paragraphs;
+  `document.fonts` faces with status; images with intrinsic/rendered size, object-fit, SVG/broken;
+  stacked sibling left edges; runs of ≥ 3 consecutive same-kind siblings (tag + first class) and
+  their gaps; margins/paddings/gaps used. At the widest viewport it also asks Chromium which fonts
+  rendered a sample of headings/paragraphs (`collectRenderedFonts`: DevTools
+  `CSS.getPlatformFontsForNode` on the element holding the first text). Stored as
+  `…/<viewport>.quality.json`, key in `page_capture.quality_key`.
+- **Checks and verdicts** (`packages/scanners/src/design-quality.ts`, rule ids `dq-*`):
+  - Heading consistency: same level, same screen size, different family/size(±0.5px)/weight/style
+    → potential (low). Chrome headings excluded (noted). Never compares across screen sizes.
+  - Visual hierarchy: median size of a lower level > a higher level on the same page/screen size
+    → potential (low); the semantic outline stays with the accessibility scanner.
+  - Reference values: **not recompared.** Heading values of the confirmed design spec (brand
+    guideline values after confirmation, Figma values after confirmation, manual values) are
+    compared by the design comparison; the scanner copies those items (with the reference source)
+    into its comparison table and says the finding is under Design comparison. Levels without a
+    reference value are listed as "unable to verify" with the observed sizes; no expected size is
+    ever invented. Design step failed → part "not available", scanner inconclusive.
+  - Web font rendering: declared first family (non-generic) has `@font-face` faces but the font
+    engine drew another font → confirmed (medium). A non-web font missing on the scan machine is
+    an inconclusive check, not a finding (it depends on the visitor's device). Skipped when the
+    design comparison already reported the same family as "web font failed to load".
+  - Uploaded brand fonts: headings/body whose first family is not one of the fonts' names →
+    potential (low); per font a comparison item: rendered (verified by the font engine) / declared
+    but fallback drawn / declared, not verifiable / not used.
+  - Images (visible, ≥ 48px, not SVG, not broken): displayed scale by object-fit (fill/cover =
+    max axis, contain = min, scale-down ≤ 1, none = 1) ≥ 1.5 → confirmed (medium at ≥ 2),
+    1.15–1.5 → potential; fill with aspect change > 5% → confirmed stretched. Measured at device
+    pixel ratio 1; blur/compression are explicitly not assessed. Broken images and alt text stay
+    with responsive/links/accessibility (noted, not repeated).
+  - Spacing: only with an explicit `spacing.scale` in the confirmed spec — off-scale values
+    (±0.5px) at the widest viewport → one potential finding with counts. Near-miss alignment
+    (stacked blocks 1–4px apart) and uneven gaps (> 2px spread in a run of ≥ 3 same-kind siblings)
+    → potential (low), at most 10 each. "Against design frames" is always an inconclusive check
+    (no page-to-frame mapping exists).
+  - Approved content: **not recompared.** Not configured when the scan has no processed content
+    document; otherwise the content comparison's counts are reported; failed/inconclusive content
+    step → part failed/not available.
+  - Status: `checks.parts` lists each part as completed / not configured / not available / failed
+    / inconclusive. Any failed or not-available part → step **inconclusive** with
+    "Partially completed … Completed: … Not available: …"; no measurements at all → inconclusive.
+- **Explanations / fixes:** every `dq-*` rule has a plain-language explanation
+  (`explain.ts`), a fix guide with steps, illustrative code with [placeholders] and verification
+  (`fix-guide.ts`), and catalog guidance for AI/deterministic issue text (`ai/catalog.ts`).
+- **Results UI and reports:** scanner results and the scan's comparison page show the parts and
+  the comparison table; Pages list has a Design quality column; reports list the parts per step.
+  Issues, history comparison, AI and grounding treat `design_quality` like any other category.
+- **Migration `0010_design_quality`** (additive): `project_page_link`, `project_font`,
+  `page.origin varchar(16) default 'crawl'`, `page_capture.quality_key`. Applied to the development
+  database on 2026-10-13 after a `pg_dump -Fc` backup (`qa_copilot_before_0010.dump`, session
+  scratchpad); row counts unchanged (20 projects, 19 scans, 1 098 pages, 14 003 findings, 471
+  issues).
+
 ## Environment facts
 - PostgreSQL 18 binaries: `C:\Program Files\PostgreSQL\18\bin` (not on PATH). Service `postgresql-x64-18`.
 - No Docker, no Redis, no pnpm. Windows 11, Node 22.16.
@@ -470,14 +832,21 @@
   file reads afterwards ("Git Destructive"). Use ordinary `git add`/`git commit` for checkpoints.
 
 ## Unfinished tasks
-- None inside Phase 10; all planned phases (0–10) are implemented. Not verified in this
-  environment: the Docker image/Compose stack (no Docker), live AI providers and the live Figma
-  API (no keys), OS signal handling of the worker on Linux (Windows cannot deliver SIGTERM to a
-  Node process; the shutdown logic itself is covered by integration tests).
+- All planned phases (0–10 and enhancement Phases 11–16) are implemented; Phases 11–16 are
+  **uncommitted**. Not verified in this environment: the Docker image/Compose stack (no Docker),
+  live AI providers and the live Figma API (no keys or token), OS signal handling of the worker on
+  Linux (Windows cannot deliver SIGTERM to a Node process; the shutdown logic itself is covered by
+  integration tests), OCR for image-only PDF pages (not implemented).
+- Owner decisions open: commit Phases 11–16; dependency advisories (see Phase 16 decisions);
+  a separate e2e database (needs the PostgreSQL superuser; `qa_copilot_test` was used instead).
 
 ## Known bugs
-- None known. Known log noise: "The destination stream closed early" from `next start` when an
-  e2e test leaves a page while a streamed response is in flight (timing-dependent, harmless).
+- None known. Remaining limits (by design, documented): a cancel arriving while the last scan step
+  runs cannot interrupt that step; the findings API and the comparison API return complete lists
+  (several MB for thousands of items); guideline values read from a merged paragraph cite the
+  paragraph's first line. Known log noise: "The destination stream closed early" from
+  `next start` when an e2e test leaves a page while a streamed response is in flight
+  (timing-dependent, harmless).
 
 ## Commands to resume
 ```bash

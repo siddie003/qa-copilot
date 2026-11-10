@@ -122,3 +122,175 @@ export function containsPhrase(haystack: string, needle: string): boolean {
     from = i + 1;
   }
 }
+
+/**
+ * Terms for an OR full-text query: distinct words of at least 3 letters/digits (any script),
+ * longest first, at most `max`. Returned as a to_tsquery string ("a | b | c") or null when the
+ * text has no usable word. Only letters and digits reach the query (no tsquery syntax).
+ */
+export function searchTerms(text: string, max = 24): string | null {
+  const words = new Set<string>();
+  for (const w of text.toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) ?? []) {
+    if (SEARCH_STOPWORDS.has(w)) continue;
+    words.add(w.slice(0, 64));
+  }
+  const picked = [...words].sort((a, b) => b.length - a.length).slice(0, max);
+  return picked.length ? picked.join(" | ") : null;
+}
+
+const SEARCH_STOPWORDS = new Set(
+  "the and for are but not you all any can her was one our out his has had how its may new now old see two way who did get him let say she too use with that this from have they will your what when were there their which would about into than them then these some could other only more also been just like over such".split(
+    " ",
+  ),
+);
+
+// ---- Large-document processing: coverage and states (Phase 13) --------------------------------
+
+/**
+ * What processing a document read, persisted on `content_document.coverage`. PDFs are reported
+ * per page; other formats as a whole ("document"). Page lists are 1-based page numbers.
+ */
+export interface DocumentCoverage {
+  unit: "page" | "document";
+  /** Pages in the PDF (null for other formats or before the PDF was opened). */
+  pagesDetected: number | null;
+  pagesWithText: number;
+  /** Pages without any content (no text, no images). */
+  pagesBlank: number;
+  /** Pages with images but no text layer: probably scanned; not readable without OCR. */
+  pagesImageOnly: number;
+  pagesFailed: number;
+  imageOnlyPages: number[];
+  blankPages: number[];
+  /** First failures with their error (at most 100 listed; `pagesFailed` has the total). */
+  failedPages: Array<{ page: number; error: string }>;
+  /** First page not read (time limit, block limit, interruption), or null when all were read. */
+  notProcessedFrom: number | null;
+  blocks: number;
+  blocksShortened: number;
+  blockLimitReached: boolean;
+  /** Indexed sections (retrieval chunks). */
+  chunks: number;
+  timeLimitReached: boolean;
+  /** Why reading stopped early (time limit, memory limit, error), if it did. */
+  stoppedReason: string | null;
+  warnings: string[];
+}
+
+export function emptyCoverage(unit: "page" | "document"): DocumentCoverage {
+  return {
+    unit,
+    pagesDetected: null,
+    pagesWithText: 0,
+    pagesBlank: 0,
+    pagesImageOnly: 0,
+    pagesFailed: 0,
+    imageOnlyPages: [],
+    blankPages: [],
+    failedPages: [],
+    notProcessedFrom: null,
+    blocks: 0,
+    blocksShortened: 0,
+    blockLimitReached: false,
+    chunks: 0,
+    timeLimitReached: false,
+    stoppedReason: null,
+    warnings: [],
+  };
+}
+
+export type DocumentOutcome = "completed" | "completed_with_warnings" | "partial";
+
+/** Pages that were never read (from `notProcessedFrom` to the last page). */
+export function pagesNotProcessed(c: DocumentCoverage): number {
+  if (c.notProcessedFrom === null || c.pagesDetected === null) return 0;
+  return Math.max(0, c.pagesDetected - c.notProcessedFrom + 1);
+}
+
+/**
+ * Partial: some content could not be read (image-only or failed pages, pages not reached, block
+ * limit). With warnings: everything was read but something was adjusted (shortened blocks,
+ * converter messages). Blank pages are listed but are not a warning.
+ */
+export function documentOutcome(c: DocumentCoverage): DocumentOutcome {
+  if (
+    c.pagesImageOnly > 0 ||
+    c.pagesFailed > 0 ||
+    pagesNotProcessed(c) > 0 ||
+    c.blockLimitReached ||
+    c.timeLimitReached ||
+    c.stoppedReason
+  )
+    return "partial";
+  if (c.warnings.length || c.blocksShortened > 0) return "completed_with_warnings";
+  return "completed";
+}
+
+/** Compact page list: "1–3, 7, 9–12". */
+export function formatPageList(pages: number[]): string {
+  const sorted = [...new Set(pages)].sort((a, b) => a - b);
+  const out: string[] = [];
+  for (let i = 0; i < sorted.length; i++) {
+    const start = sorted[i]!;
+    while (sorted[i + 1] === sorted[i]! + 1) i++;
+    out.push(start === sorted[i] ? String(start) : `${start}–${sorted[i]}`);
+  }
+  return out.join(", ");
+}
+
+/** One sentence on what was not read, or null when everything was read. */
+export function coverageGapNote(c: DocumentCoverage | null | undefined): string | null {
+  if (!c) return null;
+  const parts: string[] = [];
+  if (c.pagesImageOnly)
+    parts.push(
+      `${c.pagesImageOnly} image-only page(s) (${formatPageList(c.imageOnlyPages)}) could not be read without OCR`,
+    );
+  if (c.pagesFailed)
+    parts.push(
+      `${c.pagesFailed} page(s) could not be read (${formatPageList(c.failedPages.map((p) => p.page))}${c.pagesFailed > c.failedPages.length ? ", …" : ""})`,
+    );
+  const notRead = pagesNotProcessed(c);
+  if (notRead)
+    parts.push(
+      `pages ${c.notProcessedFrom}–${c.pagesDetected} were not read (${c.stoppedReason ?? "processing stopped"})`,
+    );
+  else if (c.stoppedReason) parts.push(c.stoppedReason);
+  if (c.blockLimitReached)
+    parts.push(`only the first ${c.blocks} blocks were kept (DOCUMENT_MAX_BLOCKS)`);
+  return parts.length ? `${parts.join("; ")}.` : null;
+}
+
+export const DOCUMENT_STATES = {
+  queued: { label: "Upload received", tone: "neutral" },
+  extracting: { label: "Extracting text", tone: "info" },
+  indexing: { label: "Indexing sections", tone: "info" },
+  completed: { label: "Completed", tone: "success" },
+  completed_with_warnings: { label: "Completed with warnings", tone: "warning" },
+  partial: { label: "Partial", tone: "warning" },
+  failed: { label: "Failed", tone: "danger" },
+  cancelled: { label: "Cancelled", tone: "neutral" },
+} as const;
+export type DocumentState = keyof typeof DOCUMENT_STATES;
+
+/** The state shown to users, from the persisted job status, stage and outcome. */
+export function documentState(d: {
+  parseStatus: string;
+  stage?: string | null;
+  outcome?: string | null;
+}): DocumentState {
+  switch (d.parseStatus) {
+    case "pending":
+      return "queued";
+    case "parsing":
+      return d.stage === "indexing" ? "indexing" : "extracting";
+    case "parsed":
+      return d.outcome === "partial" || d.outcome === "completed_with_warnings"
+        ? d.outcome
+        : "completed";
+    case "cancelled":
+      return "cancelled";
+    default:
+      return "failed";
+  }
+}

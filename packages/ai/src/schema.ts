@@ -14,6 +14,19 @@ export const CLAIM_FIELDS = [
 export type ClaimField = (typeof CLAIM_FIELDS)[number];
 
 /**
+ * Plain-language explanation for people who are not developers, plus fix steps. Optional: older
+ * responses and models that omit it keep the built-in fix guide for these parts.
+ */
+export const aiExplanationSchema = z.object({
+  problem: z.string(),
+  impact: z.string(),
+  nextStep: z.string(),
+  steps: z.array(z.string()),
+  caveats: z.array(z.string()),
+});
+export type AiExplanationOutput = z.infer<typeof aiExplanationSchema>;
+
+/**
  * What the AI returns for one group. The schema checks structure only; content limits (lengths,
  * allowed ids, values) are enforced per issue by grounding, so one bad issue never discards a
  * whole batch.
@@ -36,10 +49,19 @@ export const aiIssueSchema = z.object({
       evidenceField: z.enum(CLAIM_FIELDS),
     }),
   ),
+  explanation: aiExplanationSchema.nullish(),
 });
 export type AiIssue = z.infer<typeof aiIssueSchema>;
 
 export const aiBatchSchema = z.object({ issues: z.array(aiIssueSchema) });
+
+/**
+ * The schema requested from providers: the same, with explanation required (strict structured
+ * output needs every property listed; null is allowed). Responses are parsed with aiBatchSchema.
+ */
+const aiBatchOutputSchema = z.object({
+  issues: z.array(aiIssueSchema.extend({ explanation: aiExplanationSchema.nullable() })),
+});
 export type AiBatch = z.infer<typeof aiBatchSchema>;
 
 const UNSUPPORTED_KEYWORDS = new Set([
@@ -83,5 +105,5 @@ export function toStructuredOutputSchema(schema: z.ZodType): Record<string, unkn
   return clean(z.toJSONSchema(schema)) as Record<string, unknown>;
 }
 
-export const AI_BATCH_JSON_SCHEMA = toStructuredOutputSchema(aiBatchSchema);
+export const AI_BATCH_JSON_SCHEMA = toStructuredOutputSchema(aiBatchOutputSchema);
 export const AI_BATCH_SCHEMA_NAME = "qa_issue_interpretation";

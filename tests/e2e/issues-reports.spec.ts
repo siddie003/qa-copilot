@@ -74,10 +74,40 @@ test("work on issues and export reports from a finished scan", async ({ page, ba
   await page.getByRole("link", { name: "Site is not served over HTTPS" }).click();
   await page.waitForURL(new RegExp(`/projects/${projectId}/issues/\\d+$`));
   await expect(page.getByRole("heading", { name: "Site is not served over HTTPS" })).toBeVisible();
+  // Level 1: plain-language explanation first.
+  const summary = page.getByRole("region", { name: "In plain language" });
+  for (const heading of ["What is the problem?", "Why does it matter?", "What should I do next?"])
+    await expect(summary.getByRole("heading", { name: heading, level: 3 })).toBeVisible();
+  await expect(summary).toContainText("served without encryption");
+  await expect(summary).toContainText("Built-in guidance for this rule");
+  const fix = page.getByRole("region", { name: "How to fix it" });
+  await expect(fix.getByRole("listitem").first()).toContainText("TLS certificate");
+  await expect(fix).toContainText("not evidence that the site has been attacked");
+  await expect(fix).toContainText("not verified until a later scan confirms");
+  const verify = page.getByRole("region", { name: "How to verify the fix" });
+  await expect(verify).toContainText("Run a new scan of the same pages");
+  await expect(verify).toContainText("Marking it Resolved yourself does not verify the fix");
+  // Level 2: technical details and evidence are kept, collapsed until opened.
+  const technical = page.locator("details#technical");
+  await expect(technical).not.toHaveAttribute("open", "");
+  await expect(
+    page.getByRole("region", { name: "Technical details (for developers)" }),
+  ).toBeHidden();
+  // "See the evidence" opens the section at the findings.
+  await page
+    .getByRole("region", { name: "Where it was found" })
+    .getByRole("link", { name: "See the evidence" })
+    .click();
+  await expect(page).toHaveURL(/#evidence$/);
+  await expect(technical).toHaveAttribute("open", "");
   await expect(
     page.getByRole("heading", { name: /Source findings and evidence \(\d+\)/ }),
   ).toBeVisible();
   await expect(page.getByText(/^SEC-\d{3}$/).first()).toBeVisible();
+  await expect(
+    page.getByRole("region", { name: "Technical details (for developers)" }),
+  ).toContainText("https-not-used");
+  await expect(page.getByRole("region", { name: "How reliable" })).toContainText("Confidence");
   const history = page.getByRole("region", { name: "History" });
   await expect(history).toContainText("Detected as Open");
   await expect(history).toContainText("System · scan #1");

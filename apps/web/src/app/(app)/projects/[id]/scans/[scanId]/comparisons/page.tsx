@@ -1,4 +1,4 @@
-import { AppError, COMPARISON_KEYS, COMPARISON_LABELS } from "@qa/core";
+import { AppError, COMPARISON_KEYS, FINDING_SOURCE_LABELS } from "@qa/core";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -7,6 +7,7 @@ import {
   ComparisonVerdict,
   type ComparisonVerdictKey,
 } from "@/components/references/comparison-verdict";
+import { CheckParts, type CheckPart } from "@/components/scans/check-parts";
 import { StepStatus } from "@/components/ui/badges";
 import { cn } from "@/lib/cn";
 import { loadProjectForPage } from "@/server/loaders";
@@ -31,6 +32,9 @@ interface Comparison {
   unableToVerify: number;
   items: Item[];
 }
+
+/** Steps whose results are reference comparisons (Design Quality cross-references the others). */
+const SECTIONS = [...COMPARISON_KEYS, "design_quality"] as const;
 
 const COUNTS: Array<[ComparisonVerdictKey, keyof Comparison]> = [
   ["match", "matched"],
@@ -100,9 +104,13 @@ export default async function ComparisonsPage({
         )}
       </nav>
 
-      {COMPARISON_KEYS.map((key) => {
+      {SECTIONS.map((key) => {
         const run = scan.runs.find((r) => r.stepKey === key);
+        if (key === "design_quality" && !run) return null;
+        const label = FINDING_SOURCE_LABELS[key] ?? key;
+        const valued = key !== "content";
         const cmp = (run?.checks as { comparison?: Comparison } | null)?.comparison;
+        const parts = (run?.checks as { parts?: CheckPart[] } | null)?.parts ?? [];
         const items = (cmp?.items ?? []).filter((i) => !verdict || i.verdict === verdict);
         return (
           <section
@@ -112,11 +120,12 @@ export default async function ComparisonsPage({
           >
             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-3">
               <h3 id={`cmp-${key}`} className="text-sm font-semibold">
-                {COMPARISON_LABELS[key]}
+                {label}
               </h3>
               {run && <StepStatus status={run.status} />}
             </div>
             <div className="space-y-4 p-4">
+              {parts.length > 0 && <CheckParts parts={parts} />}
               {!run ? (
                 <p className="text-sm text-muted">Not part of this scan.</p>
               ) : !cmp ? (
@@ -142,29 +151,29 @@ export default async function ComparisonsPage({
                   ) : (
                     <div
                       role="region"
-                      aria-label={`${COMPARISON_LABELS[key]} items`}
+                      aria-label={`${label} items`}
                       tabIndex={0}
                       className="relative overflow-x-auto rounded-md border border-border"
                     >
                       <table className="w-full min-w-[900px] text-left text-sm">
                         <caption className="sr-only">
-                          {COMPARISON_LABELS[key]} of scan #{scan.number}
+                          {label} of scan #{scan.number}
                         </caption>
                         <thead className="border-b border-border bg-surface-muted text-xs uppercase tracking-wide text-muted">
                           <tr>
                             <th scope="col" className="px-3 py-2 font-medium">
-                              {key === "design" ? "Value" : "Approved text"}
+                              {valued ? "Value" : "Approved text"}
                             </th>
                             <th scope="col" className="px-3 py-2 font-medium">
                               Verdict
                             </th>
-                            {key === "design" && (
+                            {valued && (
                               <th scope="col" className="px-3 py-2 font-medium">
                                 Expected
                               </th>
                             )}
                             <th scope="col" className="px-3 py-2 font-medium">
-                              {key === "design" ? "Found" : "Found on the website"}
+                              {valued ? "Found" : "Found on the website"}
                             </th>
                             <th scope="col" className="px-3 py-2 font-medium">
                               Details
@@ -183,7 +192,7 @@ export default async function ComparisonsPage({
                               <td className="px-3 py-2">
                                 <ComparisonVerdict verdict={i.verdict} />
                               </td>
-                              {key === "design" && (
+                              {valued && (
                                 <td className="max-w-xs break-words px-3 py-2">
                                   {i.expected ?? "—"}
                                 </td>

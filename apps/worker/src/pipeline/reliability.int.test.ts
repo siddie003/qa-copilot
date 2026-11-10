@@ -348,6 +348,34 @@ describe.skipIf(!hasTestDb)("worker reliability (Phase 10)", () => {
     }
   }, 120_000);
 
+  it("a cancel requested between heartbeats is honoured before the next step starts", async () => {
+    const site = await startSlowSite(100);
+    try {
+      const project = await newProject(site.url);
+      const queued = await queue(project.id, snapshotFor(site.url));
+      const claimed = (await pipelineRepo.claimNextScan(db(), "t#1"))!;
+      // The periodic heartbeat never fires during this scan: only the per-step check can see it.
+      const run = runScan(runtime(site.port, { heartbeatMs: 600_000 }), claimed);
+      for (let i = 0; i < 100 && (await stepsOf(queued.id)).crawl?.status !== "running"; i++)
+        await delay(50);
+      await db()
+        .update(schema.scan)
+        .set({ cancelRequestedAt: new Date() })
+        .where(eq(schema.scan.id, queued.id));
+      await run;
+
+      expect((await scanRow(queued.id)).status).toBe("cancelled");
+      const steps = await stepsOf(queued.id);
+      // The step that was running ends on its own terms (here it may hit the step timeout).
+      expect(["completed", "failed"]).toContain(steps.crawl!.status);
+      expect(steps.capture).toMatchObject({ status: "skipped", statusReason: "Cancelled by user" });
+      for (const key of ["seo", "grounding"])
+        expect(steps[key]).toMatchObject({ status: "skipped", statusReason: "Scan cancelled" });
+    } finally {
+      await site.close();
+    }
+  }, 120_000);
+
   it("a worker shutdown stops the scan and records it as interrupted, keeping what it stored", async () => {
     const site = await startSlowSite(1_500);
     try {

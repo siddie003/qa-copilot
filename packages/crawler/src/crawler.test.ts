@@ -235,6 +235,67 @@ describe("crawling the fixture site (real HTTP)", () => {
     expect(summary.queuedButNotVisited).toBeGreaterThan(0);
   });
 
+  it("always visits user-selected pages (page links), outside the page and depth limits", async () => {
+    const pages: CrawledPage[] = [];
+    const summary = await crawl(
+      {
+        startUrl: site.url,
+        maxPages: 2,
+        maxDepth: 0,
+        concurrency: 2,
+        fetch: fetchOpts,
+        robots: await loadRobots(site.url, fetchOpts),
+        seedUrls: [
+          `${site.url}design-quality`, // not linked from any page
+          `${site.url}does-not-exist`,
+          `${site.url}about`,
+          `${site.url}private/secret`,
+          `${site.url}about#team`, // same page as /about
+        ],
+      },
+      async (p) => {
+        pages.push(p);
+      },
+    );
+    const byPath = new Map(pages.map((p) => [new URL(p.url).pathname, p]));
+    expect(byPath.get("/design-quality")).toMatchObject({ seed: true, depth: 0 });
+    expect(byPath.get("/design-quality")!.result!.status).toBe(200);
+    expect(byPath.get("/does-not-exist")).toMatchObject({ seed: true });
+    expect(byPath.get("/does-not-exist")!.result!.status).toBe(404);
+    expect(byPath.get("/private/secret")).toMatchObject({ seed: true, blockedByRobots: true });
+    expect(pages.filter((p) => new URL(p.url).pathname === "/about")).toHaveLength(1);
+    expect(byPath.get("/about")!.seed).toBe(true);
+    expect(byPath.get("/")!.seed).toBe(false);
+    // maxDepth 0: nothing is discovered beyond the start page and the selected pages.
+    expect([...byPath.keys()].sort()).toEqual(
+      ["/", "/about", "/design-quality", "/does-not-exist", "/private/secret"].sort(),
+    );
+    expect(summary.cancelled).toBe(false);
+  });
+
+  it("visits selected pages even when the page limit is reached by discovered pages", async () => {
+    const pages: CrawledPage[] = [];
+    const summary = await crawl(
+      {
+        startUrl: site.url,
+        maxPages: 3,
+        maxDepth: 3,
+        concurrency: 1,
+        fetch: fetchOpts,
+        robots: null,
+        seedUrls: [`${site.url}design-quality`],
+      },
+      async (p) => {
+        pages.push(p);
+      },
+    );
+    expect(pages.filter((p) => !p.seed && !p.blockedByRobots)).toHaveLength(3);
+    expect(pages.filter((p) => p.seed).map((p) => new URL(p.url).pathname)).toEqual([
+      "/design-quality",
+    ]);
+    expect(summary.limitReached).toBe(true);
+  });
+
   it("stops when cancelled", async () => {
     const controller = new AbortController();
     let visited = 0;

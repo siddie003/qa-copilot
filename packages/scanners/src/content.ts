@@ -220,6 +220,14 @@ export const contentScanner: Scanner = {
         reason: "Deleted after the scan was queued; not compared",
         pageUrl: null,
       });
+    // Partially read documents: what could not be read was not compared (never "missing").
+    for (const doc of ref.documents)
+      if (doc.coverageNote)
+        checks.inconclusive.push({
+          check: `Document ${doc.filename}`,
+          reason: `Only partly read: ${doc.coverageNote} That content was not compared.`,
+          pageUrl: null,
+        });
 
     // Website text per page, from the widest viewport that has text.
     const widest = Math.max(...ctx.viewports.map((v) => v.width));
@@ -327,6 +335,9 @@ export const contentScanner: Scanner = {
             kind: "document",
             data: {
               document: doc.filename,
+              // Source block (retrieval of the surrounding approved section for explanations).
+              documentId: doc.id,
+              blockOrder: b.order,
               location: reference,
               blockType: b.type,
               referenceText: b.text,

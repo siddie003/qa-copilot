@@ -16,6 +16,17 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * The error's message plus the server's per-field reasons (e.g. "scanDefaults.scanners.6: Invalid
+ * option"), so a generic "Request validation failed" never hides what was rejected.
+ */
+export function describeApiError(err: unknown, fallback: string): string {
+  if (!(err instanceof ApiError)) return fallback;
+  const fields = Object.entries(err.fieldErrors).slice(0, 3);
+  if (!fields.length) return err.message;
+  return `${err.message}: ${fields.map(([path, msg]) => `${path} — ${msg}`).join("; ")}`;
+}
+
 interface Problem {
   title?: string;
   detail?: string;
@@ -54,6 +65,53 @@ export async function apiFetch<T>(
     );
   }
   return data as T;
+}
+
+/**
+ * Like apiUpload, but reports upload progress (0–1, bytes sent by the browser). Uses
+ * XMLHttpRequest because fetch() has no upload progress events.
+ */
+export function apiUploadWithProgress<T>(
+  path: string,
+  file: File,
+  fields: Record<string, string> = {},
+  onProgress?: (fraction: number) => void,
+): Promise<T> {
+  const form = new FormData();
+  form.append("file", file);
+  for (const [k, v] of Object.entries(fields)) form.append(k, v);
+  return new Promise<T>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", path);
+    xhr.withCredentials = true;
+    xhr.responseType = "text";
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && e.total > 0) onProgress?.(Math.min(1, e.loaded / e.total));
+    };
+    xhr.onerror = () => reject(new ApiError(0, "Network error: the server could not be reached."));
+    xhr.onabort = () => reject(new ApiError(0, "The upload was cancelled."));
+    xhr.onload = () => {
+      let data: Record<string, unknown> = {};
+      try {
+        data = xhr.responseText ? (JSON.parse(xhr.responseText) as Record<string, unknown>) : {};
+      } catch {
+        /* non-JSON error page */
+      }
+      if (xhr.status >= 200 && xhr.status < 300) {
+        onProgress?.(1);
+        resolve(data as T);
+        return;
+      }
+      reject(
+        new ApiError(
+          xhr.status,
+          String(data.detail ?? data.title ?? `Upload failed (${xhr.status})`),
+          typeof data.code === "string" ? data.code : undefined,
+        ),
+      );
+    };
+    xhr.send(form);
+  });
 }
 
 /** Uploads one file (multipart/form-data, field "file") plus optional text fields. */

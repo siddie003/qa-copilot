@@ -17,9 +17,16 @@ export const IMPLEMENTED_STEPS = new Set<string>([
   "responsive",
   "design",
   "content",
+  "design_quality",
   "ai",
   "grounding",
 ]);
+
+/**
+ * Scanners that run after the reference comparisons instead of with the other scanners, because
+ * they read the comparisons' results (Design Quality reports them by cross-reference).
+ */
+export const LATE_SCANNERS = new Set<string>(["design_quality"]);
 
 const NOT_IMPLEMENTED_REASON: Record<string, string> = {
   scanner: "Scanner module not implemented yet (planned for Phase 5)",
@@ -59,7 +66,7 @@ export function planScanSteps(
     { stepKey: "capture" },
   ];
   for (const key of SCANNER_KEYS) {
-    if (!scanners.includes(key)) continue;
+    if (!scanners.includes(key) || LATE_SCANNERS.has(key)) continue;
     steps.push(
       IMPLEMENTED_STEPS.has(key)
         ? { stepKey: key }
@@ -71,6 +78,9 @@ export function planScanSteps(
   // grounding: validates AI text against the evidence and creates the issues (always runs).
   // Reports are not a scan step: they are generated on demand for finished scans (Phase 8).
   for (const key of ["design", "content", "ai", "grounding"]) {
+    if (key === "ai")
+      for (const late of SCANNER_KEYS)
+        if (scanners.includes(late) && LATE_SCANNERS.has(late)) steps.push({ stepKey: late });
     if (key in available && !available[key])
       steps.push({
         stepKey: key,
@@ -88,7 +98,12 @@ export interface ScanContentDocument {
   filename: string;
   sha256: string;
   targetPath: string | null;
+  /** Blocks at scan start; the comparison reads only these (a document may be continued later). */
   blockCount: number;
+  /** completed | completed_with_warnings | partial (absent on scans before Phase 13). */
+  outcome?: string | null;
+  /** What was not read, for partial documents (shown as an inconclusive check). */
+  coverageNote?: string | null;
 }
 
 /** Immutable configuration a scan runs with (stored on the scan row). */
@@ -109,4 +124,18 @@ export interface ScanConfigSnapshot {
   designSpecVersion?: number | null;
   /** Processed content documents the scan compares against. */
   contentDocuments?: ScanContentDocument[];
+  /** Pages the user added as page links (scanned even if the crawler would not reach them). */
+  pageLinks?: string[];
+  /** Brand font files uploaded to the project (names read from the font files). */
+  approvedFonts?: ScanFontReference[];
+}
+
+/** An uploaded brand font frozen into a scan: the names CSS can refer to it by. */
+export interface ScanFontReference {
+  id: string;
+  filename: string;
+  /** Family names read from the font file (typographic family, family, full name, PostScript). */
+  families: string[];
+  weight: number | null;
+  italic: boolean | null;
 }

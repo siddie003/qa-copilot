@@ -12,6 +12,7 @@ import {
   normalizeFigma,
   parseCta,
 } from "./index";
+import { guidelineSegments } from "./guideline";
 
 const figmaFile = JSON.parse(
   readFileSync(new URL("../../../fixtures/figma/design-file.json", import.meta.url), "utf8"),
@@ -173,6 +174,125 @@ describe("Figma normalization", () => {
     styles: figmaFile.styles,
   };
 
+  it("takes a text color only when every layer with the style uses the same fill (live finding)", () => {
+    // Figma text styles carry no color; each text layer has its own fill. A real file used
+    // "Body/Body-M" in mint on dark sections and black elsewhere (2026-10-10).
+    const text = (id: string, rgb: [number, number, number]) => ({
+      id,
+      name: id,
+      type: "TEXT",
+      styles: { text: "S:body" },
+      style: { fontFamily: "Inter", fontSize: 16, fontWeight: 400 },
+      fills: [{ type: "SOLID", color: { r: rgb[0], g: rgb[1], b: rgb[2], a: 1 } }],
+    });
+    const styles = { "S:body": { key: "k", name: "Body/Regular", styleType: "TEXT" } };
+    const doc = (children: unknown[]) => ({
+      name: "f",
+      lastModified: "",
+      version: "1",
+      roots: [{ id: "0:0", name: "Document", type: "DOCUMENT", children }],
+      styles,
+    });
+    const mixed = normalizeFigma(
+      doc([text("1:1", [0, 0.98, 0.76]), text("1:2", [0, 0, 0])]) as never,
+      "AbCdEfGh1234",
+    );
+    expect(mixed.spec.typography.body).toMatchObject({ fontFamily: "Inter", fontSize: 16 });
+    expect(mixed.spec.typography.body!.color).toBeUndefined();
+    expect(mixed.report.skipped.join(" ")).toMatch(
+      /Body\/Regular.*used with 2 different colors \(#00fac2, #000000\)/,
+    );
+    const same = normalizeFigma(
+      doc([text("1:1", [0, 0, 0]), text("1:2", [0, 0, 0])]) as never,
+      "AbCdEfGh1234",
+    );
+    expect(same.spec.typography.body).toMatchObject({ color: "#000000" });
+  });
+
+  it("skips an out-of-range value (a 9999px pill radius) instead of failing the whole read", () => {
+    const button = {
+      id: "2:1",
+      name: "Variant=Primary",
+      type: "COMPONENT",
+      cornerRadius: 9999,
+      paddingLeft: 24,
+      paddingRight: 24,
+      paddingTop: 16,
+      paddingBottom: 16,
+      fills: [{ type: "SOLID", color: { r: 0.318, g: 0.282, b: 0.792, a: 1 } }],
+      children: [],
+    };
+    const { spec, report } = normalizeFigma(
+      {
+        name: "f",
+        lastModified: "",
+        version: "1",
+        roots: [
+          {
+            id: "0:0",
+            name: "Document",
+            type: "DOCUMENT",
+            children: [{ id: "2:0", name: "Button", type: "COMPONENT_SET", children: [button] }],
+          },
+        ],
+        styles: {},
+      } as never,
+      "AbCdEfGh1234",
+    );
+    expect(spec.components.buttonPrimary).toMatchObject({ paddingX: 24, paddingY: 16 });
+    expect(spec.components.buttonPrimary!.borderRadius).toBeUndefined();
+    expect(report.skipped.join(" ")).toMatch(/buttonPrimary\.borderRadius = 9999: not used/);
+  });
+
+  it("reads “Body/CTA” as button text and skips XXS sizes, so the body comes from the body style", () => {
+    // Style names as in Ascendion's design library: CTA and small sizes grouped under "Body/".
+    const text = (id: string, styleId: string, fontSize: number, fontWeight: number) => ({
+      id,
+      name: id,
+      type: "TEXT",
+      characters: "Text",
+      styles: { text: styleId },
+      style: { fontFamily: "IBM Plex Sans", fontSize, fontWeight, lineHeightPx: 26 },
+      fills: [{ type: "SOLID", color: { r: 0, g: 0, b: 0, a: 1 } }],
+    });
+    const { spec, report } = normalizeFigma(
+      {
+        name: "f",
+        lastModified: "",
+        version: "1",
+        roots: [
+          {
+            id: "0:0",
+            name: "Document",
+            type: "DOCUMENT",
+            children: [
+              {
+                id: "1:0",
+                name: "Article",
+                type: "FRAME",
+                children: [
+                  text("1:1", "S:cta", 18, 500),
+                  text("1:2", "S:xxs", 16, 400),
+                  text("1:3", "S:s", 18, 300),
+                ],
+              },
+            ],
+          },
+        ],
+        styles: {
+          "S:cta": { name: "Body/CTA", styleType: "TEXT" },
+          "S:xxs": { name: "Body/Body-XXS", styleType: "TEXT" },
+          "S:s": { name: "Body/Body-S", styleType: "TEXT" },
+        },
+      } as never,
+      "AbCdEfGh1234",
+    );
+    expect(spec.typography.button).toMatchObject({ fontSize: 18, fontWeight: 500 });
+    expect(spec.typography.body).toMatchObject({ fontSize: 18, fontWeight: 300 });
+    expect(spec.typography.body!.source).toMatchObject({ name: "Body/Body-S" });
+    expect(report.skipped.join(" ")).toMatch(/Body\/Body-XXS”: no matching website role/);
+  });
+
   it("maps text styles, color styles, button variants and the container frame", () => {
     const { spec, report } = normalizeFigma(file, "AbCdEfGh1234");
     expect(spec.typography.h1).toMatchObject({
@@ -255,7 +375,7 @@ describe("Figma normalization", () => {
       [403, "UNAUTHORIZED"],
       [404, "NOT_FOUND"],
       [429, "RATE_LIMITED"],
-      [500, "NETWORK"],
+      [500, "SERVER_ERROR"],
     ] as const) {
       const err = await fetchFigmaFile({
         fileKey: "AbCdEfGh1234",
@@ -334,5 +454,39 @@ describe("brand guideline extraction", () => {
     expect(spec.typography.link).toMatchObject({ color: "#1a56db" });
     expect(spec.typography.h2).toBeUndefined(); // nothing is invented for roles the document omits
     expect(report.extracted.length).toBeGreaterThan(5);
+  });
+
+  it("reads value lines written without blank lines between them (one paragraph block)", () => {
+    const text = [
+      "Typography",
+      "Primary font: Inter",
+      "H1 — Georgia Bold, 48px / 56px",
+      "H2 — Georgia Semibold, 32px",
+      "Body text: Regular 16px, line height 24px",
+      "Body copy should stay friendly and short.",
+    ].join("\n");
+    for (const { blocks } of [extractPlainText(text), extractMarkdown(text)]) {
+      expect(blocks).toHaveLength(1); // the lines really are one block
+      const { spec, report } = extractGuidelineDraft(blocks, {
+        referenceId: "ref-1",
+        filename: "brand.md",
+      });
+      expect(spec.typography.h1).toMatchObject({
+        fontFamily: "Georgia",
+        fontSize: 48,
+        lineHeight: 56,
+        fontWeight: 700,
+        source: { excerpt: "H1 - Georgia Bold, 48px / 56px" },
+      });
+      expect(spec.typography.h2).toMatchObject({ fontSize: 32, fontWeight: 600 });
+      expect(spec.typography.body).toMatchObject({
+        fontFamily: "Inter",
+        fontSize: 16,
+        lineHeight: 24,
+      });
+      expect(report.extracted).toHaveLength(4);
+    }
+    // Prose that merely mentions a role word is not split off as a value line.
+    expect(guidelineSegments("Use body copy for links and buttons in the footer.")).toHaveLength(1);
   });
 });

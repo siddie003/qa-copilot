@@ -137,11 +137,55 @@ export function IssueTable({
           </div>
         </div>
       )}
+      {/* Phones: one card per issue (the table needs ~960px). Same selection state. */}
+      <ul
+        aria-label={`Issues, ${total} matching`}
+        className="divide-y divide-border rounded-lg border border-border bg-surface md:hidden"
+      >
+        {items.map((i) => {
+          const note = i.verdict ? VERDICT_NOTES[i.verdict] : undefined;
+          return (
+            <li key={i.id} className={selected.has(i.id) ? "bg-primary/5 p-3" : "p-3"}>
+              <div className="flex items-start gap-3">
+                <input
+                  type="checkbox"
+                  aria-label={`Select ISSUE-${i.displayNo}`}
+                  checked={selected.has(i.id)}
+                  onChange={() => toggle(i.id)}
+                  className="mt-1 size-5 shrink-0 accent-[var(--primary)]"
+                />
+                <div className="min-w-0 flex-1 space-y-1.5">
+                  <div className="font-mono text-xs text-muted">ISSUE-{i.displayNo}</div>
+                  <Link
+                    href={issueHref(i)}
+                    className="block font-medium break-words hover:underline"
+                  >
+                    {i.title}
+                  </Link>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <SeverityBadge severity={i.severity} />
+                    <IssueStatusBadge status={i.status} />
+                    {note && <StatusPill tone={note.tone}>{note.label}</StatusPill>}
+                  </div>
+                  <p className="text-xs text-muted">
+                    {FINDING_SOURCE_LABELS[i.category] ?? i.category}
+                    {showProject && ` · ${i.projectName}`}
+                    {i.pageCount !== null &&
+                      ` · ${i.pageCount === 0 ? "site-wide" : `${i.pageCount} page${i.pageCount === 1 ? "" : "s"}`}`}
+                    {i.lastSeenScanNumber !== null &&
+                      ` · last seen in scan #${i.lastSeenScanNumber}`}
+                  </p>
+                </div>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
       <div
         role="region"
         aria-label="Issues table"
         tabIndex={0}
-        className="relative overflow-x-auto rounded-lg border border-border bg-surface"
+        className="relative hidden overflow-x-auto rounded-lg border border-border bg-surface md:block"
       >
         <table className="w-full min-w-[960px] text-left text-sm">
           <caption className="sr-only">Issues, {total} matching</caption>

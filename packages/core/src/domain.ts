@@ -1,6 +1,9 @@
 import { z } from "zod";
 
-/** The six QA scanners. Design/content comparison run additionally when references exist. */
+/**
+ * The selectable QA scanners. Design/content comparison run additionally when references exist;
+ * Design Quality & Typography runs after them (it reads their results, see pipeline.ts).
+ */
 export const SCANNER_KEYS = [
   "accessibility",
   "security",
@@ -8,6 +11,7 @@ export const SCANNER_KEYS = [
   "links",
   "performance",
   "responsive",
+  "design_quality",
 ] as const;
 export type ScannerKey = (typeof SCANNER_KEYS)[number];
 
@@ -18,6 +22,7 @@ export const SCANNER_LABELS: Record<ScannerKey, string> = {
   links: "Broken links / mixed content",
   performance: "Performance",
   responsive: "Responsive / visual",
+  design_quality: "Design Quality & Typography",
 };
 
 /** Reference comparisons: run in addition to the scanners when the project has references. */
@@ -175,13 +180,25 @@ const projectName = z
 
 const websiteUrlInput = z.string().trim().min(1, "website URL is required").max(2048);
 
+/** Most user-selected page links a project can have. */
+export const MAX_PAGE_LINKS = 50;
+
+const pageLinkInput = z.string().trim().min(1, "enter a page URL").max(2048, "the URL is too long");
+
 export const projectCreateSchema = z.object({
   name: projectName,
   websiteUrl: websiteUrlInput,
   scanDefaults: scanDefaultsSchema.optional(),
   /** Optional Figma design link captured in the setup wizard (processed in a later step). */
   figmaUrl: z.string().trim().max(2048).optional(),
+  /** Specific website pages the user wants scanned in addition to the crawl (same site only). */
+  pageLinks: z
+    .array(pageLinkInput)
+    .max(MAX_PAGE_LINKS, `at most ${MAX_PAGE_LINKS} page links`)
+    .optional(),
 });
+
+export const pageLinkCreateSchema = z.object({ url: pageLinkInput });
 
 export const figmaReferenceSchema = z.object({
   figmaUrl: z.string().trim().min(1, "Figma link is required").max(2048),

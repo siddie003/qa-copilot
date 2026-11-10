@@ -89,6 +89,20 @@ test("acceptance: from sign-up to comparison and project deletion", async ({ pag
   await page.waitForURL(/\/dashboard$/);
   await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible();
 
+  // 2b. Phase 15: the wizard keeps the website, the Figma file and documents apart.
+  await page.goto("/projects/new");
+  await page.getByLabel("Project name").fill("Wizard check");
+  await page.getByLabel("Website URL").fill("https://www.figma.com/design/AbC123xyz0Q/Landing");
+  await page.getByRole("button", { name: "Continue" }).click();
+  await expect(page.getByText(/^This is a Figma link\./)).toBeVisible();
+  await page.getByLabel("Website URL").fill("http://localhost:4100");
+  await page.getByRole("button", { name: "Continue" }).click();
+  await expect(page.getByRole("heading", { name: /Step 2 of 5/ })).toBeVisible();
+  await page.getByLabel("Figma design URL (optional)").fill("http://localhost:4100");
+  await page.getByRole("button", { name: "Continue" }).click();
+  await expect(page.getByText(/^This is not a Figma link\./)).toBeVisible();
+  await audit(page);
+
   // 3. A project for the fixture site; its custom-header site credential selects version v1.
   const created = await page.request.post("/api/v1/projects", {
     headers: origin,
@@ -171,6 +185,20 @@ test("acceptance: from sign-up to comparison and project deletion", async ({ pag
   const markdown = readFileSync((await file.path())!, "utf8");
   expect(markdown).toContain("Site is not served over HTTPS");
   expect(markdown).toContain("In progress");
+  // Stored files keep their own sandboxing policy; the site-wide header must not replace it.
+  const download = await page.request.get((await link.getAttribute("href"))!);
+  expect(download.headers()["content-security-policy"]).toBe(
+    "default-src 'none'; sandbox; frame-ancestors 'none'",
+  );
+  const captures = await (await page.request.get(`/api/v1/scans/${scan1}/captures`)).json();
+  const shot = (captures.items as Array<{ screenshotKey: string | null }>).find(
+    (c) => c.screenshotKey,
+  )!.screenshotKey!;
+  const artifact = await page.request.get(`/api/v1/artifacts/${shot}`);
+  expect(artifact.status()).toBe(200);
+  expect(artifact.headers()["content-security-policy"]).toBe(
+    "default-src 'none'; img-src 'self'; sandbox; frame-ancestors 'none'",
+  );
 
   // 8. The site changes (v2) and is scanned again.
   expect((await variant("v2")).ok()).toBe(true);

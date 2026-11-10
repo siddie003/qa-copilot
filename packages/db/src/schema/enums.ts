@@ -49,9 +49,16 @@ export const referenceStatusEnum = pgEnum("reference_status", [
   "ready",
   "failed",
   "unavailable",
+  "cancelled",
 ]);
 
-export const parseStatusEnum = pgEnum("parse_status", ["pending", "parsing", "parsed", "failed"]);
+export const parseStatusEnum = pgEnum("parse_status", [
+  "pending",
+  "parsing",
+  "parsed",
+  "failed",
+  "cancelled",
+]);
 
 export const contentBlockTypeEnum = pgEnum("content_block_type", [
   "heading",

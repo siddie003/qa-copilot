@@ -17,6 +17,12 @@ export interface CrawlOptions {
    * build navigation client-side (React, Vue, ...) are crawled too.
    */
   renderLinks?: (url: string) => Promise<string[]>;
+  /**
+   * Pages the user selected (page links): visited right after the start page, always, even beyond
+   * maxPages and maxDepth (they count separately), and reported with `seed: true`. Must already be
+   * validated as same-site URLs.
+   */
+  seedUrls?: string[];
 }
 
 export interface CrawledPage {
@@ -31,6 +37,8 @@ export interface CrawledPage {
   renderError: string | null;
   blockedByRobots: boolean;
   isHtml: boolean;
+  /** True for pages from CrawlOptions.seedUrls (user-selected page links). */
+  seed: boolean;
 }
 
 export interface CrawlSummary {
@@ -47,6 +55,7 @@ interface QueueItem {
   url: string;
   depth: number;
   from: string | null;
+  seed?: boolean;
 }
 
 /**
@@ -63,6 +72,18 @@ export async function crawl(
   let siteUrl = start;
   const seen = new Set<string>([start]);
   const queue: QueueItem[] = [{ url: start, depth: 0, from: null }];
+  // User-selected pages come right after the start page and are never re-queued as discovered.
+  for (const raw of opts.seedUrls ?? []) {
+    const n = normalizeUrl(raw);
+    if (!n) continue;
+    if (n === start) {
+      queue[0]!.seed = true;
+      continue;
+    }
+    if (seen.has(n)) continue;
+    seen.add(n);
+    queue.push({ url: n, depth: 0, from: null, seed: true });
+  }
   const summary: CrawlSummary = {
     siteUrl,
     pagesFetched: 0,
@@ -73,6 +94,9 @@ export async function crawl(
     cancelled: false,
   };
   let active = 0;
+  // Page limit: counts the start page and discovered pages only (user-selected pages are extra).
+  let regularFetched = 0;
+  let regularActive = 0;
 
   const enqueue = (raw: string, depth: number, from: string) => {
     const n = normalizeUrl(raw);
@@ -96,10 +120,12 @@ export async function crawl(
         renderError: null,
         blockedByRobots: true,
         isHtml: false,
+        seed: Boolean(item.seed),
       });
       return;
     }
     summary.pagesFetched += 1;
+    if (!item.seed) regularFetched += 1;
     const result = await guardedFetch(item.url, { ...opts.fetch, signal: opts.signal });
     if (result.error || (result.status ?? 0) >= 400) summary.failed += 1;
 
@@ -153,6 +179,7 @@ export async function crawl(
       renderError,
       blockedByRobots: false,
       isHtml,
+      seed: Boolean(item.seed),
     });
   };
 
@@ -160,20 +187,32 @@ export async function crawl(
     const pump = () => {
       if (opts.signal?.aborted) summary.cancelled = true;
       while (!summary.cancelled && active < opts.concurrency && queue.length > 0) {
-        if (summary.pagesFetched + active >= opts.maxPages) {
+        const next = queue[0]!;
+        if (!next.seed && regularFetched + regularActive >= opts.maxPages) {
           summary.limitReached = true;
-          break;
+          // Remaining user-selected pages are still visited.
+          const seedAt = queue.findIndex((q) => q.seed);
+          if (seedAt === -1) break;
+          queue.unshift(...queue.splice(seedAt, 1));
+          continue;
         }
         const item = queue.shift()!;
         active += 1;
+        if (!item.seed) regularActive += 1;
         visit(item)
           .then(() => {
             active -= 1;
+            if (!item.seed) regularActive -= 1;
             pump();
           })
           .catch(reject);
       }
-      if (active === 0 && (queue.length === 0 || summary.limitReached || summary.cancelled))
+      if (
+        active === 0 &&
+        (queue.length === 0 ||
+          summary.cancelled ||
+          (summary.limitReached && !queue.some((q) => q.seed)))
+      )
         resolve();
     };
     pump();

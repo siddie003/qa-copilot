@@ -7,6 +7,7 @@ import { StepStatus } from "@/components/ui/badges";
 import { InfoTip } from "@/components/ui/info-tip";
 import { Card } from "@/components/ui/stat";
 import { formatDateTime } from "@/lib/format";
+import { referencesNotReady } from "@/lib/scan-readiness";
 import { loadProjectForPage } from "@/server/loaders";
 import { StartScan } from "./start-scan";
 
@@ -177,7 +178,16 @@ export default async function ProjectScanPage({ params }: { params: Promise<{ id
               </Link>
             </div>
           ) : (
-            <StartScan projectId={project.id} websiteUrl={project.websiteUrl} />
+            <StartScan
+              projectId={project.id}
+              websiteUrl={project.websiteUrl}
+              notReady={referencesNotReady({
+                designConfirmed: Boolean(specState.active),
+                designDraft: Boolean(specState.draft),
+                designProcessing: processingRefs,
+                documentsProcessing: waitingDocs,
+              })}
+            />
           )}
           <p className="mt-3 flex items-start gap-1 text-xs text-muted">
             Runs the enabled scanners, then compares the site with the confirmed design reference

@@ -15,11 +15,15 @@ const securityHeaders = [
     key: "Permissions-Policy",
     value: "camera=(), microphone=(), geolocation=(), browsing-topics=()",
   },
-  {
-    key: "Content-Security-Policy",
-    value: "frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'",
-  },
 ];
+const staticCsp = {
+  key: "Content-Security-Policy",
+  value: "frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'",
+};
+// Stored files (screenshots, snapshots, report downloads) set a stricter policy of their own
+// (`default-src 'none'; sandbox`). A header from this config replaces a route's header of the
+// same name, so the static policy is not applied to those routes (found in Phase 16).
+const OWN_CSP_ROUTES = "api/v1/artifacts/|api/v1/reports/[^/]+/download";
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
@@ -29,7 +33,10 @@ const nextConfig: NextConfig = {
   outputFileTracingRoot: repoRoot,
   turbopack: { root: repoRoot },
   async headers() {
-    return [{ source: "/:path*", headers: securityHeaders }];
+    return [
+      { source: "/:path*", headers: securityHeaders },
+      { source: `/:path((?!${OWN_CSP_ROUTES}).*)`, headers: [staticCsp] },
+    ];
   },
 };
 

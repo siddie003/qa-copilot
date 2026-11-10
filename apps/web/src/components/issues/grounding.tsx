@@ -44,6 +44,11 @@ const FIELD_NAMES: Record<string, string> = {
   severityRationale: "Severity rationale",
   expected: "Expected value",
   actual: "Actual value",
+  "explanation.problem": "Plain summary: the problem",
+  "explanation.impact": "Plain summary: why it matters",
+  "explanation.nextStep": "Plain summary: next step",
+  "explanation.steps": "Fix steps",
+  "explanation.caveats": "Caveats",
 };
 
 const CLAIM_FIELDS: Record<string, string> = {
@@ -69,17 +74,29 @@ export function describeCheck(c: {
   const unsupported = list(d.unsupported);
   const reason = typeof d.reason === "string" ? d.reason : null;
   if (c.checkType.startsWith("field:")) {
-    const name = FIELD_NAMES[c.checkType.slice(6)] ?? c.checkType.slice(6);
+    const field = c.checkType.slice(6);
+    const name = FIELD_NAMES[field] ?? field;
+    const isList = field === "explanation.steps" || field === "explanation.caveats";
     return {
       label: `${name}: values supported by the evidence`,
       detail: c.passed
-        ? typeof d.checkedFacts === "number" && d.checkedFacts > 0
-          ? `${d.checkedFacts} value(s) checked`
-          : "No numbers, colors, links or quotes to check"
+        ? isList
+          ? `${String(d.items)} item(s) checked`
+          : typeof d.checkedFacts === "number" && d.checkedFacts > 0
+            ? `${d.checkedFacts} value(s) checked`
+            : "No numbers, colors, links or quotes to check"
         : [
             reason,
+            ...list(d.reasons),
+            isList && typeof d.failedItems === "number"
+              ? `${d.failedItems} of ${String(d.items)} item(s) not supported`
+              : null,
             unsupported.length ? `Not in the evidence: ${unsupported.join(", ")}` : null,
-            "replaced with the scanner's wording",
+            field.startsWith("explanation.")
+              ? d.replacedWith === "supported items only"
+                ? "only the supported items are shown"
+                : "the built-in fix guide is shown instead"
+              : "replaced with the scanner's wording",
           ]
             .filter(Boolean)
             .join(" · "),

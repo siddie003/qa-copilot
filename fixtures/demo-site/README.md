@@ -23,6 +23,7 @@ Run: `npm run demo:site` (http://localhost:4100). `localhost:4100` is in the def
 | `/docs/guide.pdf` | Non-page resource: linked but not crawled as a page |
 | `https://example.org/partner` | External link: never crawled, but link-checked |
 | `/blog/archive/2019` | Depth 4 (beyond the default depth limit of 3) |
+| `/design-quality` | Not linked from any page: reached only when added as a page link (see below) |
 
 ## Intentional defects per scanner
 
@@ -47,6 +48,13 @@ Run: `npm run demo:site` (http://localhost:4100). `localhost:4100` is in the def
 | Responsive | 1100 px wide banner (horizontal overflow); clipped text | `/wide` |
 | Responsive | 16 px button; overlapping links | `/contact` |
 | Responsive | 1200 px image without max-width (overflow on mobile/tablet) | `/` |
+| Design Quality | 600×200 hero PNG displayed at 1200×400 (enlarged 2×) | `/` |
+| Design Quality | H2 headings in two styles (28px/700 and 22px/400) | `/design-quality` |
+| Design Quality | H3 (34px) larger than the H2s | `/design-quality` |
+| Design Quality | Web font “Brand Missing” whose file 404s (Georgia renders instead) | `/design-quality` |
+| Design Quality | 40×40 PNG displayed at 160×160 (enlarged 4×) | `/design-quality` |
+| Design Quality | 3:1 PNG drawn into a 2:1 box (stretched) | `/design-quality` |
+| Design Quality | Stacked blocks 3px apart horizontally; cards spaced 16/28/16px | `/design-quality` |
 
 No framework or CMS signals are served, so technology detection reports "Could not determine"
 (the `Server` header is reported separately as server software).

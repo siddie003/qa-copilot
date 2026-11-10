@@ -7,6 +7,9 @@ runs evidence-based QA scanners, and turns the findings into developer-ready iss
 > **Status:** Phase 10 (production hardening) complete — all planned phases are implemented. See
 > [PROJECT_STATUS.md](PROJECT_STATUS.md), [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and, for
 > production, [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+> An enhancement programme (Phases 11–16: free-tier LLM, large documents, Figma multi-page
+> processing, UX) started on 2026-10-09; its baseline and plan are in
+> [ENHANCEMENT_BASELINE.md](ENHANCEMENT_BASELINE.md).
 
 ## Requirements
 
@@ -64,8 +67,10 @@ were written).
 
 What a scan does: preflight (URL safety checks, reachability, robots.txt, technology detection,
 site credentials) → crawl (same-site pages within the page/depth limits, redirects, HTTP status,
-links rendered by JavaScript) → browser capture (every page at every viewport: screenshot,
-rendered DOM, network, console, lab Core Web Vitals, layout measurements) → six QA scanners:
+links rendered by JavaScript, plus the project's **page links**, which are always visited and
+marked “Your page link”; one that cannot be loaded is reported with its error) → browser capture
+(every page at every viewport: screenshot, rendered DOM, network, console, lab Core Web Vitals,
+layout measurements) → the selected QA scanners:
 
 | Scanner | What it checks | Tooling |
 |---|---|---|
@@ -75,8 +80,10 @@ rendered DOM, network, console, lab Core Web Vitals, layout measurements) → si
 | Broken links / mixed content | Every unique link (HEAD→GET, retries; confirmed vs temporary vs inconclusive), redirect chains, failed resources, mixed content | built-in |
 | Performance | LCP, CLS, TBT (approx.), TTFB, FCP vs Google thresholds; page weight, JS/CSS, large/oversized images, render-blocking | Chromium performance APIs |
 | Responsive / visual | Horizontal overflow, clipped text, overlapping controls, touch targets, small text, images; live mobile-menu test | built-in |
+| Design Quality & Typography | H1–H6 typography per level and screen size (consistency, visual hierarchy), web fonts that did not render, text not in the uploaded brand fonts, images enlarged beyond their source or stretched, spacing against the reference spacing scale, near-miss alignment, uneven gaps; reports the design and content comparisons' results for headings and approved text by cross-reference (no duplicate findings) | computed styles, Chromium font engine (DevTools `CSS.getPlatformFontsForNode`), DOM geometry |
 
-After the scanners, two reference comparisons run when the project has references:
+After the scanners, two reference comparisons run when the project has references (Design
+Quality & Typography runs after them, because it reports their outcome):
 
 | Comparison | Compares | Verdicts |
 |---|---|---|
@@ -96,7 +103,8 @@ After the scanners, two more steps turn findings into developer-ready issues:
 1. **AI analysis** (only when an AI provider is configured): the findings are grouped
    deterministically — one issue per scanner rule (e.g. "Meta description is missing (4 pages)"),
    one per design value or approved text block — and the provider writes a title, description,
-   severity rationale, fix steps and cited statements for each group, in batches per category.
+   severity rationale, fix steps, cited statements and an optional plain-language explanation
+   (problem, impact, next step, steps, caveats) for each group, in batches per category.
 2. **Evidence validation** (always): a deterministic grounding validator checks the AI text against
    the evidence. AI text that cites findings that do not exist or belong to another issue is
    rejected; any field containing a number, color, URL, page path, quote or finding id that is not
@@ -111,13 +119,18 @@ scan's **Issues** page shows every issue with its source findings, how its text 
 ("AI text, evidence-checked", "AI text, parts replaced", "AI text rejected", "Scanner wording"),
 each grounding check and the AI requests made (tokens, model; prompts are not stored).
 
-AI configuration (see `.env.example`): `AI_PROVIDER=anthropic` with `ANTHROPIC_API_KEY` and
-`AI_MODEL` (recommended `claude-opus-5-5`), optional `AI_EFFORT`; refusals by Anthropic's safety
-classifiers are retried on the recommended fallback model (`AI_REFUSAL_FALLBACK=true`). Or
-`AI_PROVIDER=openai-compatible` with `OPENAI_API_KEY`, `AI_MODEL` and optional `OPENAI_BASE_URL`
-for any Chat Completions server that supports JSON-schema output. `AI_CONCURRENCY`,
-`AI_TIMEOUT_MS` and `AI_MAX_OUTPUT_TOKENS` tune requests. The AI receives finding data only (never
-credentials); website content is passed as escaped data that it is told not to follow.
+AI configuration: see **[LLM_PROVIDER_SETUP.md](LLM_PROVIDER_SETUP.md)** (verified free-tier
+limits, data-use terms, setup, troubleshooting). Providers: `gemini` (Google Gemini API free tier,
+`GEMINI_API_KEY`, e.g. `AI_MODEL=gemini-3.8-flash`), `groq` (`GROQ_API_KEY`, e.g.
+`openai/gpt-oss-120b`), `anthropic` (`ANTHROPIC_API_KEY`, recommended `claude-opus-5-5`, optional
+`AI_EFFORT`, refusal fallback with `AI_REFUSAL_FALLBACK=true`) and `openai-compatible`
+(`OPENAI_API_KEY`, optional `OPENAI_BASE_URL`). Free-tier controls: `AI_REQUESTS_PER_MINUTE`,
+`AI_TOKENS_PER_MINUTE`, `AI_MAX_INPUT_TOKENS`, `AI_MAX_ISSUES_PER_SCAN`, `AI_MAX_RETRIES`,
+`AI_MAX_RETRY_WAIT_MS`, `AI_STRUCTURED_OUTPUT`. Rate limits are retried with jittered backoff and
+`Retry-After`; exhausted quotas and credential errors stop further requests of the scan (its
+issues keep the scanners' wording). Check a configuration with `npm run ai:check` (one request).
+The AI receives finding data only (never credentials; credential-shaped strings are removed);
+website content is passed as escaped data that it is told not to follow.
 
 ## Working on issues
 
@@ -126,10 +139,25 @@ filters for severity, status, verdict (confirmed, needs review, unable to verify
 affected page URL, confidence and when the issue was last detected, plus search by title or
 `ISSUE-n` and sorting. Select issues to change their status in bulk.
 
-Each issue has a detail page (`/projects/:id/issues/:n`) with the description, affected pages,
-expected/actual values, fix guidance, every source finding with its evidence, the grounding checks
-behind its text, every scan it was found in (older occurrences can be opened), and its **status
-history**. Users set *Open*, *In progress*, *Resolved* or *Ignored* (with an optional note);
+Each issue has a detail page (`/projects/:id/issues/:n`) in two levels. **Level 1** explains
+the issue for developers and non-developers alike: **In plain language** (What is the problem? Why
+does it matter? What should I do next? How serious?), **Where it was found** (pages, screen sizes,
+element, the HTML the scanner recorded and the measured values), **How to fix it** (numbered
+steps, things to watch out for, and what the scan could not tell), **Example fix** (before/after
+code with a copy button, only where the evidence supports one) and **How to verify the fix**.
+The wording per rule is fixed text (`packages/core/src/explain.ts`, `packages/core/src/fix-guide.ts`)
+filled in only with the scan's own records: "before" code is copied from the evidence or labelled
+illustrative, anything the scan cannot know (what an image shows, the page language, the right
+link) is a `[placeholder]`, and a suggested fix is never shown as verified — only a later scan
+that re-checks the same pages confirms it. When AI is configured, grounded AI text may replace the
+summary, steps or caveats (labelled; code examples are never AI-written). **Level 2**, the
+collapsible **Technical details and evidence** section, keeps the description, rule id, all
+affected pages, expected/actual values, the stored recommendation, how reliable the finding is,
+every source finding with its raw evidence and screenshots, and the grounding checks behind its
+text. The sidebar shows every scan the issue was found in (older occurrences can be opened) and its
+**status history**. The scan's **Findings** page shows the same guide for every raw finding
+(built when the finding is opened), with the scanner's own output under "Technical details and
+evidence". Users set *Open*, *In progress*, *Resolved* or *Ignored* (with an optional note);
 *Inconclusive* (evidence cannot confirm the issue) and *Reopened* are set by the system only.
 Every change is recorded with who made it, when, the note and the previous status; detections
 and evidence-based status changes made by scans are recorded as system events with the scan.
@@ -192,15 +220,33 @@ downloaded through an owner-checked endpoint.
 
 ## Design references and approved content
 
-Open a project's **References** tab (or use the setup wizard):
+The setup wizard collects everything in five steps: **Project** (name, website URL, optional
+brand guidelines and font files) → **Figma / brand** (Figma design URL, design values by hand,
+content documents with optional page mapping, page links with “+ Add page”) → **Configure scan**
+→ **Review** → **Start scan** (files are uploaded after the project is created, with progress and
+a Retry button for failures). Only the name and website URL are required.
+
+Open a project's **References** tab to manage the same inputs later:
 
 - **Figma**: add a file or frame link. With a Figma personal access token (`FIGMA_ACCESS_TOKEN`
   or a per-project token saved encrypted on the References page), the worker reads local text
   styles, color styles, Button components (Primary/Secondary variants) and a frame named
-  “Container”. Every value records the Figma node it came from.
+  “Container”. Every value records the Figma node it came from. Large files are read page by
+  page (any number of pages) with a manifest of every page and frame, Figma's rate limits are
+  respected (a stopped read is shown as Partial and can continue with only the missing pages),
+  and unchanged files are not fetched again; see **[FIGMA_INTEGRATION.md](FIGMA_INTEGRATION.md)**.
 - **Brand guideline** (PDF, DOCX, TXT, Markdown): values written literally (e.g.
   “Primary — #1A56DB”, “H1 — Georgia Bold, 48px / 56px”) are extracted with page/line citations.
 - **Manual values / JSON**: the token editor, with JSON import and export.
+- **Brand fonts** (WOFF2, WOFF, TTF, OTF, up to 10 MB each, 20 per project): the file is
+  accepted only if its font tables can be read; family, style, weight, italic and the licence's
+  embedding bits are read from the file itself. Fonts are stored privately and never added to the
+  website; the Design Quality scanner checks whether headings and text use them and whether
+  Chromium actually renders them. Collections (.ttc) are not supported.
+- **Page links**: pages of the website that every scan must include (same site only, validated
+  against the SSRF rules, duplicates rejected). They are scanned outside the page and depth
+  limits. They are not mapped to Figma frames: the design reference is a set of values, not page
+  layouts.
 
 With an AI provider configured, guideline documents are also read with AI assistance: values
 written in prose ("Our body copy is set in Inter Regular at 16px") are added only if they appear
@@ -216,10 +262,18 @@ newest confirmed version; each scan records the version it used.
 blocks (headings, paragraphs, list items, links, CTAs). Map a document to a page (e.g. `/about`),
 or use markers inside it: a line `Page: About`, `URL: /about` or `<!-- page: /about -->` applies
 to the following blocks; `CTA: Text → /path` or `CTA: [Text](/path)` declares a call to action.
-Scanned (image-only) PDFs are reported as unreadable (no OCR).
+Large documents are processed in persisted batches (PDFs page by page) with real progress, a
+coverage report (pages with text, blank, image-only — no OCR — and failed), cancel and "Continue
+reading" after an interruption, and a full-text index of sections that can be searched on the
+References page; see **[LARGE_DOCUMENT_PROCESSING.md](LARGE_DOCUMENT_PROCESSING.md)**. Image-only
+(scanned) pages are listed as not read, never silently skipped.
 
 Login-protected sites: add site credentials in project settings (HTTP Basic, a custom header or
 cookies). They are encrypted with `ENCRYPTION_KEY` and sent to the scanned site only.
+
+For a complete, guided demo (brand guidelines, fonts, approved content, page links, real
+defects, a fix-and-rescan), see **[fixtures/manager-demo/DATA_MANIFEST.md](fixtures/manager-demo/DATA_MANIFEST.md)**
+and `npm run demo:manager`.
 
 To try it locally, run the controlled fixture website and scan `http://localhost:4100`
 (allowlisted by default in `.env.example`):
@@ -252,7 +306,9 @@ connection time (DNS rebinding) and for every request made by the browser.
   constraint).
 - **Browser protections:** nonce-based Content-Security-Policy on every page (no inline or
   third-party scripts), HSTS on HTTPS, `X-Frame-Options: DENY`, `nosniff`, strict referrer and
-  permissions policies; scanned website content is always rendered as text.
+  permissions policies; scanned website content is always rendered as text. Stored files
+  (screenshots, page snapshots, report downloads) are served with their own
+  `default-src 'none'; sandbox; frame-ancestors 'none'` policy, and HTML snapshots as plain text.
 - **Scanning safety (SSRF):** only http/https; private, loopback, link-local, CGNAT, metadata and
   other reserved addresses are refused when a URL is saved, before every request and redirect, at
   connection time and for every request Chromium makes (guard proxy); `SCAN_ALLOWED_PRIVATE_HOSTS`
@@ -300,13 +356,19 @@ All `/api/v1` endpoints except health checks require a session cookie (sign in v
 | POST | `/api/v1/projects/validate-url` | Check and normalize a website URL `{ websiteUrl }` |
 | GET | `/api/v1/projects/:id/references` | Design references of a project |
 | POST | `/api/v1/projects/:id/references` | Add a Figma link `{ figmaUrl }` (queued for the worker) |
-| POST/DELETE | `/api/v1/projects/:id/references/:refId/refresh`, `/references/:refId` | Fetch/extract again, remove |
+| POST/DELETE | `/api/v1/projects/:id/references/:refId/refresh`, `/references/:refId` | Fetch/extract again (or continue a stopped read), remove |
+| POST | `/api/v1/projects/:id/references/:refId/cancel` | Cancel a queued or running reference read |
 | GET/PUT | `/api/v1/projects/:id/design-spec` | Active spec, draft (with changes) and history; save values as a new confirmed version |
 | POST/DELETE | `/api/v1/projects/:id/design-spec/draft/confirm` `{ version }`, `/design-spec/draft` | Confirm or discard the pending draft |
-| POST | `/api/v1/projects/:id/guideline-documents` | Upload a brand guideline (multipart `file`) |
+| POST | `/api/v1/projects/:id/guideline-documents` | Upload a brand guideline (multipart `file`; the same file twice → 409) |
+| GET/POST | `/api/v1/projects/:id/fonts` | List or upload brand font files (multipart `file`; validated and read before storing; the same file twice → 409) |
+| DELETE | `/api/v1/projects/:id/fonts/:fontId` | Remove a brand font file |
+| GET/POST | `/api/v1/projects/:id/page-links` | List or add a page link `{ url }` (full URL or `/path`; same site; duplicate → 409) |
+| DELETE | `/api/v1/projects/:id/page-links/:linkId` | Remove a page link |
 | GET/POST | `/api/v1/projects/:id/content-documents` | List or upload content documents (multipart `file`, optional `targetPath`) |
 | PATCH/DELETE | `/api/v1/content-documents/:id` | Set the page mapping `{ targetPath }`, delete |
-| GET/POST | `/api/v1/content-documents/:id/blocks`, `/retry` | Extracted blocks; retry a failed document |
+| GET/POST | `/api/v1/content-documents/:id/blocks`, `/retry`, `/cancel` | Extracted blocks; retry or continue a document; cancel processing |
+| GET | `/api/v1/projects/:id/content-search?q=&document=` | Full-text search of indexed approved content |
 | PUT/DELETE | `/api/v1/projects/:id/figma-token` | Store (encrypted, write-only) or remove the project's Figma token |
 | GET | `/api/v1/dashboard/summary` | Dashboard figures computed from stored records |
 | GET/PUT/DELETE | `/api/v1/projects/:id/scan-auth` | Site credentials (write-only; GET returns a summary) |
@@ -325,7 +387,10 @@ All `/api/v1` endpoints except health checks require a session cookie (sign in v
 | POST | `/api/v1/scans/:id/cancel` | Cancel a queued or running scan |
 | GET | `/api/v1/artifacts/:key` | Screenshot/snapshot (owner only) |
 
-`POST /api/v1/projects` also accepts an optional `figmaUrl`, saved in the same transaction.
+`POST /api/v1/projects` also accepts an optional `figmaUrl` and `pageLinks` (array of URLs or
+paths), saved in the same transaction; an invalid page link rejects the whole request (400, error
+path `pageLinks.<n>`) so nothing is created. Uploading the same content document twice to a
+project is refused (409).
 
 Website URLs are validated before they are stored: only http/https, no embedded credentials,
 no private/loopback/link-local/metadata addresses or local host names, except hosts listed in

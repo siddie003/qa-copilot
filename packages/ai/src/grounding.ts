@@ -1,3 +1,4 @@
+import type { AiExplanation } from "@qa/core/fix-guide";
 import { withVerdictWording } from "./deterministic";
 import type { PreparedGroup } from "./prompt";
 import type { AiIssue, ClaimField } from "./schema";
@@ -23,7 +24,10 @@ import { buildCorpus, countFacts, unsupportedFacts, type Corpus } from "./values
  *     length limits;
  *   - severity within one level of the scanners' severity, never raised for unconfirmed findings;
  *   - affected element is one of the findings' selectors;
- *   - each claim is supported by the field of the finding it cites.
+ *   - each claim is supported by the field of the finding it cites;
+ *   - the optional plain-language explanation: problem, impact and next step each pass the same
+ *     fact check (else that part falls back to the built-in fix guide); the fix steps are kept
+ *     only if every step passes; caveats are kept one by one.
  * Affected URLs and the category are never taken from AI output.
  */
 
@@ -39,6 +43,16 @@ export const FIELD_LIMITS = {
 } as const;
 const MAX_CLAIMS = 6;
 const MAX_CLAIM_LENGTH = 400;
+
+export const EXPLANATION_LIMITS = {
+  problem: 400,
+  impact: 500,
+  nextStep: 400,
+  step: 400,
+  caveat: 300,
+  maxSteps: 8,
+  maxCaveats: 4,
+} as const;
 
 const STOPWORDS = new Set(
   "this that with from have does when where which their there these those page pages website site element elements finding findings issue value values should would could about other than into more most only also been were they them".split(
@@ -115,6 +129,8 @@ export function issueCorpus(p: PreparedGroup, referenceValues: unknown[] = []): 
       // The accessibility scanner tests against WCAG 2.2 A/AA (scan scope, not a finding).
       g.category === "accessibility" ? "WCAG 2.2 A/AA" : null,
       referenceValues,
+      // Approved sections shown to the AI for content issues (it may quote them).
+      p.context?.approvedSections ?? null,
     ],
     g.findings.map((f) => f.displayId),
   );
@@ -194,6 +210,63 @@ export function groundAiIssue(ai: AiIssue, ctx: GroundingContext): GroundingResu
   checkText("title", ai.title, FIELD_LIMITS.title);
   checkText("description", ai.description, FIELD_LIMITS.description);
   checkText("recommendation", ai.recommendation, FIELD_LIMITS.recommendation);
+
+  // Optional plain-language explanation: grounded part by part.
+  const assess = (value: string, limit: number) => {
+    const text = value.trim();
+    const reason = !text ? "empty" : text.length > limit ? `longer than ${limit} characters` : null;
+    const unsupported = reason ? [] : unsupportedFacts(text, corpus);
+    return { text, reason, unsupported, passed: !reason && unsupported.length === 0 };
+  };
+  const x = ai.explanation ?? null;
+  if (x) {
+    const out: AiExplanation = {};
+    for (const key of ["problem", "impact", "nextStep"] as const) {
+      const r = assess(x[key], EXPLANATION_LIMITS[key]);
+      checks.push({
+        checkType: `field:explanation.${key}`,
+        passed: r.passed,
+        detail: {
+          checkedFacts: r.reason ? 0 : countFacts(r.text),
+          ...(r.unsupported.length ? { unsupported: r.unsupported.slice(0, 20) } : {}),
+          ...(r.reason ? { reason: r.reason } : {}),
+          ...(r.passed ? {} : { replacedWith: "built-in fix guide" }),
+        },
+      });
+      if (r.passed) out[key] = r.text;
+    }
+    const lists = [
+      ["steps", x.steps, EXPLANATION_LIMITS.step, EXPLANATION_LIMITS.maxSteps, true],
+      ["caveats", x.caveats, EXPLANATION_LIMITS.caveat, EXPLANATION_LIMITS.maxCaveats, false],
+    ] as const;
+    for (const [key, items, limit, max, allOrNothing] of lists) {
+      const results = items
+        .filter((s) => s.trim())
+        .slice(0, max)
+        .map((s) => assess(s, limit));
+      if (!results.length) continue;
+      const bad = results.filter((r) => !r.passed);
+      const kept = allOrNothing && bad.length ? [] : results.filter((r) => r.passed);
+      checks.push({
+        checkType: `field:explanation.${key}`,
+        passed: bad.length === 0,
+        detail: {
+          items: results.length,
+          ...(items.length > max ? { received: items.length } : {}),
+          ...(bad.length
+            ? {
+                failedItems: bad.length,
+                unsupported: bad.flatMap((r) => r.unsupported).slice(0, 20),
+                reasons: [...new Set(bad.map((r) => r.reason).filter(Boolean))],
+                replacedWith: kept.length ? "supported items only" : "built-in fix guide",
+              }
+            : {}),
+        },
+      });
+      if (kept.length) out[key] = kept.map((r) => r.text);
+    }
+    fields.explanation = Object.keys(out).length ? out : null;
+  }
   for (const field of ["expected", "actual"] as const) {
     const v = ai[field];
     // null means "differs between findings": the scanner's value (if any) is kept.

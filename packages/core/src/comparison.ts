@@ -903,11 +903,21 @@ function classify(
     const measured = findings.some((f) => f.changes.some((c) => c.measurement))
       ? " Measured values differ between the scans (lab measurements vary between page loads)."
       : "";
+    // Findings on pages only one of the scans could check are not changes, but they are named:
+    // "same findings" would be wrong when the target found more where the base could not look.
+    const coverage = [
+      counts.newly_checked
+        ? `${plural(counts.newly_checked, "finding")} on parts scan ${B} could not check`
+        : "",
+      counts.not_rechecked
+        ? `${plural(counts.not_rechecked, "finding")} could not be re-checked by scan ${T}`
+        : "",
+    ].filter(Boolean);
     return {
       category: "persistent",
       reason:
-        (counts.not_rechecked
-          ? `Found in both scans with the same findings; ${plural(counts.not_rechecked, "finding")} could not be re-checked by scan ${T}.`
+        (coverage.length
+          ? `Found in both scans; the findings both scans checked are the same; ${coverage.join("; ")}.`
           : "Found in both scans with the same severity, verdict and findings.") + measured,
     };
   }

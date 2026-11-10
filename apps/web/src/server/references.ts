@@ -8,6 +8,7 @@ import {
   emptyDesignSpec,
   getConfig,
   notFound,
+  searchTerms,
   validationError,
   zodIssues,
 } from "@qa/core";
@@ -103,6 +104,15 @@ export async function getReferenceState(userId: string, projectId: string) {
     },
     sources: sources.map((s) => ({
       ...s,
+      // Frame lists stay on the server (large files have thousands); counts are kept.
+      manifest: s.manifest
+        ? {
+            ...s.manifest,
+            pages: ((s.manifest.pages ?? []) as Array<Record<string, unknown>>).map(
+              ({ frames: _frames, ...p }) => p,
+            ),
+          }
+        : null,
       fetchedAt: iso(s.fetchedAt),
       createdAt: s.createdAt.toISOString(),
     })),
@@ -167,6 +177,14 @@ export async function uploadGuideline(userId: string, projectId: string, file: U
       "CONFLICT",
       `A project can have at most ${MAX_GUIDELINE_DOCUMENTS} guideline documents.`,
     );
+  const duplicate = existing.find(
+    (s) => s.meta?.sha256 === createHash("sha256").update(file.bytes).digest("hex"),
+  );
+  if (duplicate)
+    throw new AppError(
+      "CONFLICT",
+      `This brand guideline is already uploaded to the project (as “${String(duplicate.meta?.filename ?? "a guideline")}”).`,
+    );
   const stored = await storeUpload(project.id, file, "guidelines");
   return referencesRepo.addGuidelineReference(db, project.id, {
     storageKey: stored.storageKey,
@@ -187,6 +205,22 @@ export async function refreshReference(userId: string, projectId: string, refere
     const exists = await referencesRepo.getReference(getDb(), project.id, referenceId);
     if (!exists) throw notFound("Reference");
     throw new AppError("CONFLICT", "This reference is already being processed.");
+  }
+  return row;
+}
+
+/** Cancels a queued reference at once, or asks the worker to stop a running read. */
+export async function cancelReference(userId: string, projectId: string, referenceId: string) {
+  const project = await getProject(userId, projectId);
+  assertId(referenceId, "Reference");
+  const row = await referencesRepo.cancelReference(getDb(), project.id, referenceId);
+  if (!row) {
+    const exists = await referencesRepo.getReference(getDb(), project.id, referenceId);
+    if (!exists) throw notFound("Reference");
+    throw new AppError(
+      "CONFLICT",
+      "Only references that are queued or being read can be cancelled.",
+    );
   }
   return row;
 }
@@ -253,6 +287,13 @@ export async function uploadContentDocument(userId: string, projectId: string, f
       `A project can have at most ${MAX_CONTENT_DOCUMENTS} content documents.`,
     );
   const path = targetPath(file.fields.targetPath);
+  const sha256 = createHash("sha256").update(file.bytes).digest("hex");
+  const same = await contentRepo.findDocumentBySha(db, project.id, sha256);
+  if (same)
+    throw new AppError(
+      "CONFLICT",
+      `This document is already uploaded to the project (as “${same.filename}”). Change its website page there instead of uploading it again.`,
+    );
   const stored = await storeUpload(project.id, file, "documents");
   return contentRepo.insertDocument(db, project.id, {
     filename: stored.filename,
@@ -287,8 +328,60 @@ export async function deleteContentDocument(userId: string, documentId: string) 
 export async function retryContentDocument(userId: string, documentId: string) {
   const doc = await ownedDocument(userId, documentId);
   const row = await contentRepo.requeueDocument(getDb(), doc.id);
-  if (!row) throw new AppError("CONFLICT", "Only documents that failed to process can be retried.");
+  if (!row)
+    throw new AppError(
+      "CONFLICT",
+      "Only documents that failed, were cancelled, or stopped before their last page can be processed again.",
+    );
   return row;
+}
+
+export async function cancelContentDocument(userId: string, documentId: string) {
+  const doc = await ownedDocument(userId, documentId);
+  const row = await contentRepo.cancelDocument(getDb(), doc.id);
+  if (!row)
+    throw new AppError(
+      "CONFLICT",
+      "Only documents that are queued or being processed can be cancelled.",
+    );
+  return row;
+}
+
+/**
+ * Searches the project's indexed approved content (full text, any language, no stemming).
+ * Owner-checked; results are excerpts with their document, pages and section.
+ */
+export async function searchContent(
+  userId: string,
+  projectId: string,
+  q: string | null,
+  documentId: string | null,
+) {
+  const project = await getProject(userId, projectId);
+  const query = (q ?? "").trim().slice(0, 500);
+  const terms = searchTerms(query);
+  if (!terms) return { query, results: [] };
+  if (documentId) assertId(documentId, "Document");
+  const rows = await contentRepo.searchChunks(getDb(), {
+    projectId: project.id,
+    terms,
+    documentIds: documentId ? [documentId] : undefined,
+    limit: 20,
+  });
+  return {
+    query,
+    results: rows.map((r) => ({
+      documentId: r.documentId,
+      filename: r.filename,
+      section: r.headingText,
+      pageHint: r.pageHint,
+      pageStart: r.pageStart,
+      pageEnd: r.pageEnd,
+      chunkIndex: r.chunkIndex,
+      excerpt: r.text.length > 600 ? `${r.text.slice(0, 600)}…` : r.text,
+      rank: Number(r.rank),
+    })),
+  };
 }
 
 export async function listContentBlocks(userId: string, documentId: string) {

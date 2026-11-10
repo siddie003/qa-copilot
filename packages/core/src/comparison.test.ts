@@ -426,6 +426,17 @@ describe("compareScans: classification", () => {
     expect(item.reason).toContain("1 finding could not be re-checked by scan #2");
   });
 
+  it("does not call findings 'the same' when the target also found one on a newly checked page", () => {
+    // Scan #1 could not analyze /contact; scan #2 did and found the issue there as well.
+    const base = scan(1, [[1, [finding({})]]], { pages: [page("/"), page("/about")] });
+    const target = scan(2, [[1, [finding({}), finding({ path: "/contact" })]]]);
+    const item = compareScans(base, target, [track(1)]).issues[0]!;
+    expect(item.category).toBe("persistent");
+    expect(item.findingCounts).toMatchObject({ persistent: 1, newly_checked: 1 });
+    expect(item.reason).not.toMatch(/with the same (severity, verdict and )?findings/);
+    expect(item.reason).toContain("1 finding on parts scan #1 could not check");
+  });
+
   it("marks issues reopened by the target scan, and issues that came back after a scan without them", () => {
     const base = scan(4, [[1, [finding({})]]]);
     const target = scan(5, [

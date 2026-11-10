@@ -1,6 +1,295 @@
 # Project Status: QA Copilot
 
-_Last updated: 2026-10-05_
+_Last updated: 2026-10-13_
+
+## Manager demo package (2026-10-14)
+`fixtures/manager-demo/` — demo website, brand guidelines, Geist fonts (OFL), approved content,
+Figma-ready spec, test guide and presentation script; verified with real scans on the isolated
+stack (see `SESSION_HANDOVER.md` §00). Nothing committed.
+
+## Workflow redesign + Design Quality & Typography scanner (2026-10-13)
+Done 2026-10-13, **awaiting review**. Nothing committed. Details: `IMPLEMENTATION_NOTES.md` →
+"Workflow redesign and Design Quality & Typography scanner", `CHANGELOG.md`, `SESSION_HANDOVER.md` §0.
+- **Requirement 1 (New Project):** brand guidelines (multi-file) and font files added to step 1;
+  name + URL remain the only required fields; files are uploaded after creation with progress,
+  per-file status and Retry; nothing is lost if creation fails. Fonts: `project_font`, validated
+  and read on upload (names/weight/style from the font tables).
+- **Requirement 2 (Figma / brand):** Figma design URL kept; content documents moved here (same
+  upload/processing pipeline); Page Links section with “+ Add page”, list, Remove, validation and
+  duplicate handling; persisted in `project_page_link`, editable on the References page; scanned
+  as user-selected pages (`page.origin = 'user'`), failures reported. No automatic page↔Figma
+  frame mapping is claimed.
+- **Requirement 3:** the separate Content step was removed (wizard: 5 steps). No route, API or
+  data was removed; content documents keep their records and processing.
+- **Requirement 4:** scanner `design_quality` (“Design Quality & Typography”) across the
+  lifecycle: selection (wizard, settings, scan page), validation, planning (after design/content
+  comparison), capture, execution, persistence, issues, fix guides, comparison page, scanner
+  results, Pages column, reports, history (category-agnostic).
+- **Migration `0010_design_quality`** (additive) applied to the development database after a
+  `pg_dump` backup; row counts unchanged.
+- Tests: see "Test results 2026-10-13" in `SESSION_HANDOVER.md` §0.
+
+## Enhancement programme (Phases 11–16)
+Started 2026-10-09 in a new session. Plan, verified baseline, audit answers and open decisions:
+**`ENHANCEMENT_BASELINE.md`** (read it first). Phases: 11 baseline · 12 free-tier LLM ·
+13 large documents · 14 Figma multi-page · 15 UI/UX + plain-language issues · 16 full testing.
+One phase at a time; each waits for the user's `APPROVED — CONTINUE`; no commits without
+explicit authorization.
+
+- **Phase 11: Repository audit and baseline.** Done 2026-10-09, **awaiting approval**. No
+  application code changed. Verified: HEAD `8365d1e` (Phase 10 *is* committed — the "Git
+  checkpoints" note below predates that commit), both databases at 7/7 migrations, typecheck /
+  lint / Prettier clean, vitest **506/506** (33 unit files / 391, 20 integration files / 115),
+  `check:tsx-capture` pass. Not run: `next build` (the user's `next dev` was running), Playwright
+  e2e and `npm run smoke` (they use the development database; decision pending).
+  Approved by the user 2026-10-09 (`APPROVED — CONTINUE`; the §8 decisions were not answered, so
+  the recommended defaults were used).
+- **Phase 15 extension: human-friendly issue explanations.** Done 2026-10-11, **awaiting
+  review** (requested by the user as a further specification of Phase 15; Phase 16 was not
+  restarted). Details: `IMPLEMENTATION_NOTES.md` → "Issue explanations", `CHANGELOG.md`.
+  - Baseline before any edit (2026-10-11): typecheck, ESLint clean; Prettier clean except the
+    pre-existing `.claude/launch.json` warning; unit tests **480/480** (42 files). Integration,
+    e2e and browser tests were blocked at first by two stale isolated servers of the previous
+    session on `qa_copilot_test` (stopped with the user's permission).
+  - Implemented: shared fix guide `@qa/core/fix-guide` (summary, recorded facts, steps,
+    before/after code from the evidence, caveats, evidence gaps, verification) for all six
+    scanners plus design/content; issue page in two levels (Level 2 collapsible technical details
+    and evidence, nothing removed); plain summary on the scan issue list; plain-language block in
+    Markdown/PDF/JSON reports; optional grounded AI `explanation` (schema, prompt, grounding per
+    part, storage, UI labels); migration `0009_issue_explanation` (applied to the development
+    database after a `pg_dump` backup; counts unchanged); copy button with a legacy fallback.
+  - Tests (2026-10-11, final code): typecheck (root + all workspaces), ESLint clean; Prettier
+    clean except `.claude/launch.json` (pre-existing); unit **510/510** (43 files; +30 new:
+    23 guide, 3 explanation grounding, 2 report, 2 net component tests; one schema test updated);
+    integration **132/132** (22 files) on `qa_copilot_test`; `check:tsx-capture` pass;
+    `next build` pass; **Playwright e2e 10/10** (4.6 min, `qa_copilot_test`, AI and Figma off;
+    updated assertions for the new layout, the collapsed technical section, `#evidence` opening
+    it and the scan-list summary).
+  - **Follow-up after user feedback (same day):** the user's test was on the scan **Findings** page
+    (raw finding `A11Y-024`), which the first pass had not changed. Added the same guide to every
+    finding there (built when the finding is opened), technical output moved into a collapsible
+    section. Verified in the browser on a fresh fixture scan (57 findings, six scanners): linked
+    finding's guide server-rendered, others built on opening, 57/57 guides with all rows open, no
+    horizontal scroll at 375 px, page 0.77 MB. Final: unit **511/511**, typecheck/ESLint clean,
+    `next build` pass, e2e **10/10** (findings-page assertions updated; one locator made exact
+    because the new code blocks are labelled "… recorded by the scanner").
+  - Browser walkthrough (production build on port 3200, worker 3291, `qa_copilot_test`, AI and
+    Figma off, throwaway `@example.test` account): one scan of the local **fixture** site
+    (`localhost:4100`, six scanners, desktop + mobile) → 32 issues in all six categories. Checked
+    one issue per rule (22 rules): summary, facts, steps, examples and verification match each
+    issue's evidence; technical section closed by default and opened by `#evidence`; keyboard
+    focus on its summary; code blocks focusable; no horizontal scroll at 375 px (4 pages, with
+    the technical section open); 32/32 scan-list items show the summary; Markdown, PDF and JSON
+    reports generated with the plain-language block; no server errors, no app console errors.
+    Found and fixed: server-version facts were empty (headers are recorded per page) and the
+    canonical guide did not list the affected pages. Not visually verified: the Browser pane was
+    hidden, so only a few screenshots rendered; clipboard copy could not succeed in the hidden
+    pane (the failure message was shown correctly; the fallback added afterwards is untested in a
+    browser). No live AI request was made (quota preserved): the AI explanation path is covered
+    by unit tests only.
+- **Phase 16: Final integration, regression, security and performance validation.** Done
+  2026-10-09, **awaiting approval** (last phase of the programme). Details below in
+  "Phase 16 results".
+- **Phase 15: UI/UX and plain-language issue explanations.** Done 2026-10-09, approved
+  2026-10-09. Session handover: `SESSION_HANDOVER.md`.
+  - Started from the verified Phase 14 state: typecheck / lint / Prettier clean, vitest
+    **595/595** (62 files) before any edit.
+  - Implemented: plain-language "Explanation" on every issue (what it means, why it matters,
+    where, what was observed, how serious, how to fix, how to check the fix, how reliable) from a
+    fixed rule catalog (`@qa/core/explain`) plus the stored occurrence data — no AI needed, no
+    invented facts, fixes never shown as verified; technical details kept for developers below
+    it; specific fixes for 11 common axe rules; AI prompt asks for plain-language descriptions.
+    Wizard: Figma link refused as website URL (client + server), non-Figma URL in the Figma
+    field explained, Figma-token warning, scanner descriptions, AI/Figma "what happens next",
+    real reference statuses on the last step. Issue list: phone cards, result count, folded
+    secondary filters. Scan page: step summary.
+  - Browser walkthrough (production build on the disposable `qa_copilot_test` database, own
+    ports, throwaway `@example.test` account; the development database was not used): wizard
+    input guards, 3 real scans of the fixture site (32 → 38 issues, content comparison with an
+    uploaded document, a failed fake PDF), issue explanations for accessibility and content
+    issues, Resolved → Reopened by a later scan, filters, phone width (375 px, no horizontal
+    scroll). Found and fixed during the walkthrough: wizard said Figma was "processed in the
+    background" without a token; token was said to be in project settings (it is on References);
+    "How to check the fix" began with "Then"; long axe summaries cluttered the plain view.
+  - Tests (2026-10-09): typecheck (root + all workspaces), ESLint, Prettier clean;
+    `check:tsx-capture` pass; vitest **607/607** (64 files; 595 before + 6 catalog unit tests,
+    5 rendered-component tests, 1 integration test for the `figma_url` guard), 293 s;
+    `next build` pass; **Playwright e2e 10/10** in one run (3.3 min) on `qa_copilot_test`
+    (new assertions: wizard input guards, issue Explanation sections, evidence anchor, axe at
+    1440/390 px). The first e2e run found a **pre-existing** failure from Phase 13: the
+    references spec still expected the old "Parsed" label (now "Completed"); fixed in the test
+    only. E2E had not been run in Phases 11–14.
+  - Not done / limits: no new AI output fields (plain-language text is deterministic; the AI
+    description is only prompted to be plain and is untested live — no provider key); the issue
+    list does not show a plain-language line per row (needs the rule id in the list query);
+    Figma states were seen only as "Unavailable" (no token); `npm run smoke` not run (it uses the
+    development database).
+- **Phase 14: Figma API and multi-page processing.** Done 2026-10-09; approved by the user's
+  2026-10-09 instruction to continue with Phase 15.
+  Details: `FIGMA_INTEGRATION.md`.
+  - Official docs checked: endpoints/parameters (meta, file with depth/version, nodes; branch keys
+    accepted), rate limits in effect since 2025-11-17 (Tier 1 for View/Collab seats: up to 20 per
+    month; Full/Dev 10–20/min by plan; 429 with Retry-After and plan/seat headers).
+  - Implemented: metadata version check (unchanged → no file-content request); whole file when it
+    fits, else page list + batched `/nodes` pinned to the version, adaptive splitting, per-page
+    failure isolation (oversized / 5xx / missing pages); manifest of every page and frame with
+    request counts and rate-limit details; checkpoint + resume of only missing pages after rate
+    limits, cancellation or crashes; Partial / Ready with warnings / Cancelled states; Cancel and
+    Continue reading; manifest summary in the UI; branch links; full value lists with totals.
+  - **The "25-page cap"**: there was no Figma page cap. The accessibility scanner's fixed 25-page
+    limit was replaced by `SCAN_ACCESSIBILITY_MAX_PAGES` (default: every page of the scan) with a
+    time budget (80 % of the step timeout) — pages not reached are reported as not analyzed.
+    `SCAN_MAX_PAGES` (crawl default 25, project setting up to 500) is a user setting and unchanged.
+  - Migration `0008_figma_pages` applied to the development database after a backup
+    (`qa_copilot_before_0008.dump`); additive, ready references got outcome `completed`.
+  - Tests: typecheck / lint / Prettier clean; vitest **595/595** (62 files; 572 before + 23 new);
+    `check:tsx-capture` pass. New tests found two design gaps that were fixed before release:
+    a 500 for one page failed its whole batch (now isolated), and oversized batches were retried
+    at full size (now adaptive). **No live Figma request** was made (no token): all Figma tests use
+    mocks of the documented responses.
+  - Not done: Figma Variables, spacing scales, pixel comparison, frame-to-page matching (frames are
+    inventoried only); OAuth/plan tokens; browser check of the References page (rendered component
+    tests instead; same reason as Phase 13).
+- **Phase 13: Large-document processing.** Done 2026-10-09, approved 2026-10-09. Details:
+  `LARGE_DOCUMENT_PROCESSING.md`.
+  - Implemented: page-by-page PDF extraction in persisted batches with coverage (text / blank /
+    image-only / failed pages, not-reached pages) and checkpoints; states Upload received →
+    Extracting → Indexing → Completed / with warnings / Partial / Failed / Cancelled with real
+    counts; cancel and continue (resume at the checkpoint, identical blocks); stale runs resumed
+    (3 attempts); block cap 50,000 (configurable, partial when reached); sections (`content_chunk`)
+    with PostgreSQL full-text index, search API + References search box; exact approved-section
+    retrieval for AI explanations of content issues (≤ 2 × 800 chars); identical uploads reused
+    within a project; UTF-16 (BOM) text; scans freeze document size and report partial documents
+    as inconclusive. Migration `0007_large_documents`.
+  - **Development database:** migration 0007 applied on 2026-10-09 after a `pg_dump -Fc` backup
+    (session scratchpad, `qa_copilot_before_0007.dump`, 9.4 MB); the running worker then indexed
+    the 13 existing documents (98 sections). A first indexing attempt failed for all 13 because of
+    an integer overflow in my code (fixed); stale recovery released them after 5 minutes as
+    designed. No other data changed.
+  - Tests: typecheck / lint / Prettier clean; vitest **572/572** (59 files; 537 before + 35 new);
+    `check:tsx-capture` pass. New tests found and fixed two defects before release (cancellation
+    during the last batches reported as complete; block cap not recorded for non-PDF documents).
+    Measured: 1,000-page synthetic PDF 1.7 s / 6,100 blocks / peak RSS 300 MB; 3,000 pages 4.1 s /
+    18,300 blocks / 350 MB; search 3–9 ms (synthetic PDFs, not real-world benchmarks).
+  - Not done: OCR (image-only pages are reported, not read); browser check of the References page
+    (rendered-component tests instead; the only running app uses the development database); e2e
+    and `next build` (same reasons as Phase 11).
+- **Phase 12: Free-tier LLM integration.** Done 2026-10-09, approved 2026-10-09.
+  - Provider choice from official docs (2026-10-09): **Gemini API primary** (free tier on stable
+    models, 1M-token context, strict structured output via its OpenAI-compatible endpoint; free
+    tier content may be used by Google and read by reviewers), **Groq alternative** (no retention by
+    default, strict schemas on `gpt-oss` models, ~8K tokens/min). Details and sources:
+    `LLM_PROVIDER_SETUP.md`.
+  - Implemented: `gemini`/`groq` presets on the OpenAI-compatible adapter; jittered backoff with
+    Retry-After/RetryInfo; `quota_exhausted` / `too_large` codes; per-process RPM/TPM pacing;
+    configurable request size and issue cap; `json_object` mode; `reasoning_effort`; sanitized
+    provider messages; secret scrubbing of AI input; bounded guideline input; oversize groups not
+    sent; attempts recorded; `npm run ai:check`; Settings limits + data-use notice.
+  - Tests: typecheck / lint / Prettier clean; vitest **537/537** (506 before + 30 unit
+    `free-tier.test.ts` + 1 integration); `check:tsx-capture` pass; `npm run ai:check` run with
+    the real `.env` (AI off → exit 0). **All provider tests use local mocks; no live provider was
+    called** (no key configured). The running dev worker restarted on the new code and reported
+    healthy. Not run: e2e/smoke (dev database), `next build` (user's `next dev` running); the
+    Settings additions only render with a provider configured and were not viewed in a browser.
+  - Not in this phase (by plan): AI help for approved-content comparison (Phase 13, retrieval
+    based) and plain-language explanations (Phase 15).
+- Open defects recorded in the untracked `docs/QA-Copilot-Architecture.pdf` (not previously listed
+  here) — **all four reproduced and fixed in Phase 16**: report/artifact CSP header (the static
+  header replaced the routes' sandbox policy), guideline lines without blank lines between them
+  (nothing was read), "same findings" wording for persistent issues with newly checked findings,
+  cancel near the end of a scan (now checked before every step; a cancel during the last step
+  still cannot interrupt that step).
+
+## Live Figma (2026-10-10, after Phase 16)
+- **Figma is enabled:** personal access token in `.env` (`FIGMA_ACCESS_TOKEN`; a duplicate empty
+  line was merged). Verified live on the disposable test database: the file linked by DEMO2
+  ("Ascendion_Dev", one frame via `node-id`) was read with 1 file-content request, 9 tokens
+  extracted with citations, draft confirmed, design comparison against ascendion.com/aava
+  (3 pages): 13 matched, 9 mismatched, 3 need review, 2 unable to verify.
+- **Defect found live and fixed:** text colors came from the first layer using a text style
+  (Figma text styles have no color); now taken only when the style is used with one color.
+  Details: `FIGMA_INTEGRATION.md` §0.
+- The DEMO2 reference in the development database is still "Unavailable" (it was created before
+  the token existed): restart the app and use "Fetch again" on its References page.
+
+## Live AI (2026-10-10, after Phase 16)
+- **AI is enabled:** `.env` has `AI_PROVIDER=gemini`, `AI_MODEL=gemini-3.6-flash`, the user's
+  `GEMINI_API_KEY`, `AI_CONCURRENCY=2`, `AI_REQUESTS_PER_MINUTE=5`, `AI_TEMPERATURE` empty. The key
+  had also been pasted into the tracked `.env.example`; it was removed there (placeholder again).
+- **Live end-to-end scan** (disposable `qa_copilot_test`, fixture site, approved content): AI step
+  completed; **18 of 36 issues got AI text and all 18 passed the evidence check (163/163 grounding
+  checks)**; the other 18 kept the scanner wording because Google answered 2 requests with HTTP 503
+  ("high demand") and 1 with HTTP 429. Sample AI text is plain, specific and cites only scan
+  values.
+- **Defect found live and fixed:** the 429 was a per-minute limit, but Google's generic "exceeded
+  your current quota … plan and billing" message made the classifier report an exhausted quota and
+  stop AI for the rest of the scan. Quota ids now decide (unit test with the exact live message;
+  mutation-checked).
+- **Free-tier limits seen live** (`gemini-3.6-flash`, this project): **5 requests/minute and
+  20 requests/day**. `gemini-3.5-flash` requests counted against the same 3.6 daily quota. A scan
+  of a small site uses about 7 requests, so the free tier allows roughly 2–3 AI-assisted scans per
+  day; beyond that, issues keep the scanner wording (nothing fails). `gemini-3.8-flash` was
+  overloaded (503s, 60–90 s answers) during testing.
+- **Not verified live:** a full scan with the per-minute pacing after the classifier fix — the
+  daily quota was used up by the testing (resets at midnight Pacific time). The fix itself is
+  covered by unit tests built from Google's real response.
+
+## Phase 16 results (2026-10-09)
+All checks ran against the disposable `qa_copilot_test` database with a production build on its
+own ports (3200/3291, e2e 3100/3191) and throwaway `@example.test` accounts, all deleted. The
+development database `qa_copilot` was not used.
+
+**Security review of the Phase 11–15 changes**
+- New routes (content search, document cancel, reference cancel): owner-checked, malformed ids
+  → 404, cancel routes rate-limited; full-text search only passes letters/digits to
+  `to_tsquery` (parameterized). IDOR matrix extended to these routes: every call by another user
+  → 404 problem+json, nothing changed.
+- Outbound clients: Figma host fixed (`api.figma.com`), redirects refused, responses size-capped,
+  token only in a header; AI requests refuse redirects and provider messages are sanitized (key
+  removed, 200 chars). New secret names (`GEMINI_API_KEY`, `GROQ_API_KEY`) are redacted in logs.
+- UTF-16 text uploads only with a byte-order mark and strict decoding.
+- Secret scan: the real `.env` secret values appear in none of the 141 changed or scratch files;
+  key-shaped strings in the repository are documented fakes (`AIzaTEST…`, AWS example key,
+  `CHANGE_ME`).
+- Headers on a production build: pages carry the nonce CSP; API responses the static CSP;
+  **stored files now keep their sandbox CSP** (defect fixed, see CHANGELOG).
+- `npm audit`: production 7 moderate, dev-only 5 high / 2 critical; none reachable from request
+  handling; not changed (decision for the owner, see `IMPLEMENTATION_NOTES.md` → Phase 16).
+
+**Performance** (local Windows machine; 3,750 tracked issues, 6,625 findings, 9,250 evidence rows
+from 124 clones of a real scan, plus a second real scan; warm median of 4 requests)
+
+| Request | Before Phase 16 fixes | After |
+|---|---|---|
+| Project issues page (default / filtered / page 60) | 39 / 16 / 32 ms | 62 / 42 / 64 ms (machine busier during this run; unchanged code) |
+| Issue detail page | 24 ms | 51 ms |
+| Dashboard, scan page, history page | 18–22 ms | 43–57 ms |
+| Comparison API (3,750 issues) | 322 ms, 4.7 MB | 590 ms, 4.7 MB (unchanged code) |
+| **Compare page** | **1,672 ms, 26 MB** | **744 ms, 0.66 MB** |
+| **Findings page (6,625 findings)** | **9,135 ms, 64 MB** | **293 ms, 1.3 MB** |
+| Findings API (all, 7.4 MB) | 1,312 ms | 345 ms |
+| Second real scan incl. issue materialization over 3,750 tracks | 11.4 s | 13.6 s |
+| JSON report of the large scan (worker) | — | 1.2 s, 15 MB |
+| PDF report of the large scan (worker) | 13.7 s, 19 MB | — |
+
+The "before" and "after" runs were on different load levels of the same machine; compare sizes
+and the two rewritten pages, not small timing differences.
+
+**Phase 16 tests**
+- Typecheck (root + all workspaces), ESLint, Prettier clean; `check:tsx-capture` pass;
+  `next build` pass.
+- vitest **611/611** (64 files; 607 after Phase 15 + 4 new tests and extended assertions:
+  guideline paragraphs, comparison wording, cancel between heartbeats, findings paging; IDOR
+  matrix +4 route calls). The first full run found **one regression caused by a Phase 16 change**
+  (evidence order after adding `ORDER BY created_at`); fixed and re-run clean.
+- Mutation checks: the comparison-wording and cancel tests fail on the old code.
+- Playwright e2e **10/10** on `qa_copilot_test` (final run below). New assertions: CSP of report
+  downloads and screenshot artifacts; a finding link opens the right page with the finding
+  expanded (the scan spec's URL pattern was updated for the new `finding=` parameter).
+- `npm run smoke` (`tests/smoke/smoke.mjs`) against the isolated instance: **passed** (v1 and v2
+  scans with all six scanners, 79 findings, 40 issues, JSON report, history, comparison:
+  4 resolved / 2 new / 34 persistent), 61 s; throwaway account deleted.
+- Not verifiable here: Docker image/Compose, live AI providers, live Figma API, OCR.
 
 ## Completed phases
 - **Phase 0: Requirements & Architecture.** Approved 2026-10-03.
@@ -213,8 +502,8 @@ _Last updated: 2026-10-05_
 Created at the start of Phase 9 (2026-10-05) on `main` without touching the working tree:
 `5b2579b` Phase 6 (tree of `dfba1be`) and `8434ee8` Phases 7 + 8 (no intermediate snapshot
 existed, so they share a commit). Phase 9 has its own commit ("Phase 9: scan history and
-comparison"). Phase 10 is **not committed yet** (working tree on top of `7a6180c`); commit it
-after review.
+comparison"). Phase 10 was committed afterwards as `8365d1e` "Phase 10: production hardening"
+(2026-10-06, verified 2026-10-09).
 
 ## Phase 8 features implemented
 - **Issue explorer** (`/issues`, project Issues tab, `GET /api/v1/issues`,
@@ -520,7 +809,7 @@ after review.
     orphans locally.
 
 ## Next phase
-None planned: Phase 10 was the last phase of the Phase 0 roadmap. Waiting for review.
+Phase 15 (UI/UX and plain-language issue explanations), after the user approves Phase 14.
 
 ## Required environment variables
 `DATABASE_URL`, `BETTER_AUTH_SECRET` (required); `ENCRYPTION_KEY` (required to store site
@@ -528,6 +817,13 @@ credentials and project Figma tokens; required in production); `TEST_DATABASE_UR
 tests; optional `FIGMA_ACCESS_TOKEN`, `MAX_UPLOAD_MB`; `SCAN_ALLOWED_PRIVATE_HOSTS`, `SCAN_*`,
 `LINK_CHECK_RETRIES`, `WORKER_CONCURRENCY`; AI (optional): `AI_PROVIDER`, `AI_MODEL`,
 `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` (+ `OPENAI_BASE_URL`), `AI_EFFORT`, `AI_REFUSAL_FALLBACK`,
-`AI_CONCURRENCY`, `AI_TIMEOUT_MS`, `AI_MAX_OUTPUT_TOKENS`, `AI_TEMPERATURE`. Phase 10 (optional):
+`AI_CONCURRENCY`, `AI_TIMEOUT_MS`, `AI_MAX_OUTPUT_TOKENS`, `AI_TEMPERATURE`; Phase 12: `GEMINI_API_KEY`,
+`GROQ_API_KEY`, `AI_MAX_RETRIES`, `AI_MAX_RETRY_WAIT_MS`, `AI_REQUESTS_PER_MINUTE`,
+`AI_TOKENS_PER_MINUTE`, `AI_MAX_INPUT_TOKENS`, `AI_MAX_ISSUES_PER_SCAN`, `AI_STRUCTURED_OUTPUT`
+(see `LLM_PROVIDER_SETUP.md`); Phase 13: `DOCUMENT_EXTRACTION_TIMEOUT_MS`,
+`DOCUMENT_PARSER_MEMORY_MB`, `DOCUMENT_MAX_BLOCKS`, `DOCUMENT_CHUNK_TOKENS`
+(see `LARGE_DOCUMENT_PROCESSING.md`); Phase 14: `FIGMA_MAX_RESPONSE_MB`, `FIGMA_PAGES_PER_REQUEST`,
+`FIGMA_TIMEOUT_MS`, `FIGMA_MAX_RETRIES`, `FIGMA_MAX_RETRY_WAIT_MS`, `SCAN_ACCESSIBILITY_MAX_PAGES`
+(see `FIGMA_INTEGRATION.md`). Phase 10 (optional):
 `TRUSTED_PROXIES`, `CLIENT_IP_HEADER`, `RATE_LIMIT_ENABLED`, `WORKER_HEALTH_HOST`,
 `WORKER_SHUTDOWN_GRACE_MS`. Production settings: docs/DEPLOYMENT.md. See `.env.example`.

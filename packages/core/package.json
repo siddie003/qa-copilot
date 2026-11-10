@@ -9,7 +9,11 @@
     "./figma": "./src/figma.ts",
     "./design-spec": "./src/design-spec.ts",
     "./content": "./src/content.ts",
-    "./comparison": "./src/comparison.ts"
+    "./comparison": "./src/comparison.ts",
+    "./explain": "./src/explain.ts",
+    "./fix-guide": "./src/fix-guide.ts",
+    "./page-links": "./src/page-links.ts",
+    "./fonts": "./src/fonts.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json"

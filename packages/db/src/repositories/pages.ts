@@ -10,6 +10,8 @@ export interface PageListItem {
   httpStatus: number | null;
   depth: number;
   crawlError: string | null;
+  /** "user" when the page came from the project's page links, "crawl" otherwise. */
+  origin: string;
   /** Raw finding counts per category for this page, e.g. { seo: 3, accessibility: 5 }. */
   findingsByCategory: Record<string, number>;
 }
@@ -28,6 +30,7 @@ export async function listPagesForScan(
       httpStatus: page.httpStatus,
       depth: page.depth,
       crawlError: page.crawlError,
+      origin: page.origin,
     })
     .from(page)
     .innerJoin(scan, eq(scan.id, page.scanId))

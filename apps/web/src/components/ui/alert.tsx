@@ -3,6 +3,7 @@ import { cn } from "@/lib/cn";
 
 const STYLES = {
   error: { box: "border-danger/30 bg-danger-bg text-danger", Icon: AlertTriangle },
+  warning: { box: "border-warning/40 bg-warning-bg text-warning", Icon: AlertTriangle },
   success: { box: "border-success/30 bg-success-bg text-success", Icon: CheckCircle2 },
   info: { box: "border-info/30 bg-info-bg text-info", Icon: Info },
 } as const;

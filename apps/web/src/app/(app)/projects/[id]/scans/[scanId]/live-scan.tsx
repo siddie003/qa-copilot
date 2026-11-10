@@ -157,6 +157,17 @@ export function LiveScan({
 
   const running = !TERMINAL.has(scan.status);
   const totalFindings = scan.runs.reduce((sum, r) => sum + (r.findingCount ?? 0), 0);
+  // Step counts from the stored step records (the summary above the step list).
+  const stepCount = (status: string) => scan.runs.filter((r) => r.status === status).length;
+  const finishedSteps = scan.runs.filter((r) => r.status !== "pending" && r.status !== "running");
+  const stepSummary = [
+    `${finishedSteps.length} of ${scan.runs.length} steps finished`,
+    stepCount("failed") && `${stepCount("failed")} failed`,
+    stepCount("inconclusive") && `${stepCount("inconclusive")} inconclusive`,
+    stepCount("skipped") && `${stepCount("skipped")} skipped`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
   const groundingRun = scan.runs.find((r) => r.stepKey === "grounding");
   const issueCount =
     groundingRun?.status === "completed" ? Number(groundingRun.checks?.issues ?? 0) : 0;
@@ -254,7 +265,11 @@ export function LiveScan({
       )}
 
       <div className="grid gap-6 xl:grid-cols-[1fr_20rem]">
-        <Card title="Progress" className="min-w-0">
+        <Card
+          title="Progress"
+          className="min-w-0"
+          action={<span className="text-xs text-muted">{stepSummary}</span>}
+        >
           <ol className="divide-y divide-border">
             {scan.runs.map((r) => (
               <li

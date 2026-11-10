@@ -94,8 +94,14 @@ test("start a QA scan from the UI and watch it complete with live status", async
   await page.waitForURL(/\/findings$/);
   await expect(page.getByRole("heading", { name: /Findings · Scan #1/ })).toBeVisible();
   const httpFinding = page.locator("details", { hasText: "Site is not served over HTTPS" });
-  await httpFinding.locator("summary").click();
-  await expect(httpFinding.getByText("Evidence")).toBeVisible();
+  await httpFinding.locator("summary").first().click();
+  // Plain-language guide first; the raw scanner output stays one click away.
+  await expect(httpFinding.getByText("What is the problem?")).toBeVisible();
+  await expect(httpFinding).toContainText("served without encryption");
+  await expect(httpFinding.getByRole("heading", { name: "How to verify the fix" })).toBeVisible();
+  await expect(httpFinding.getByRole("heading", { name: "Evidence", exact: true })).toBeHidden();
+  await httpFinding.getByText("Technical details and evidence").click();
+  await expect(httpFinding.getByRole("heading", { name: "Evidence", exact: true })).toBeVisible();
   await expect(httpFinding.getByText("http://localhost:4100/").first()).toBeVisible();
   await expect(
     page.getByRole("heading", { name: "Checks that could not be verified" }),
@@ -106,7 +112,7 @@ test("start a QA scan from the UI and watch it complete with live status", async
   expect(findingsA11y.violations.map((v) => `${v.id} (${v.impact})`)).toEqual([]);
 
   // Filter by scanner.
-  await page.getByLabel("Scanner").selectOption("security");
+  await page.getByLabel("Scanner", { exact: true }).selectOption("security");
   await page.getByRole("button", { name: "Apply" }).click();
   await page.waitForURL(/scanner=security/);
   await expect(page.locator("details summary").first()).toContainText("SEC-");
@@ -117,6 +123,10 @@ test("start a QA scan from the UI and watch it complete with live status", async
   const httpIssue = page.locator("li[id^=issue-]", { hasText: "Site is not served over HTTPS" });
   await httpIssue.locator("summary").click();
   await expect(httpIssue.getByText("Scanner wording")).toBeVisible();
+  await expect(httpIssue.getByText("What is the problem?")).toBeVisible();
+  await expect(
+    httpIssue.getByRole("link", { name: "Step-by-step fix, example code and how to verify it" }),
+  ).toHaveAttribute("href", /\/issues\/\d+\?scan=.+#fix$/);
   await expect(httpIssue.getByRole("heading", { name: "How to fix" })).toBeVisible();
   await expect(httpIssue.getByText(/redirect every http:\/\/ request to https:\/\//)).toBeVisible();
   await expect(httpIssue.getByText("No AI text was produced for this issue.")).toBeVisible();
@@ -138,10 +148,13 @@ test("start a QA scan from the UI and watch it complete with live status", async
     .getByRole("link", { name: /^SEC-\d{3}$/ })
     .first()
     .click();
-  await page.waitForURL(/\/findings\?scanner=security#SEC-\d{3}$/);
-  const linked = page.locator("li", { hasText: "Site is not served over HTTPS" }).first();
-  await linked.locator("summary").click();
-  await expect(linked.getByRole("link", { name: /^ISSUE-\d+$/ })).toBeVisible();
+  // The link names the finding, so the findings view opens its page with that finding expanded.
+  await page.waitForURL(/\/findings\?scanner=security&finding=(SEC-\d{3})#\1$/);
+  const findingId = new URL(page.url()).searchParams.get("finding")!;
+  const linked = page.locator(`li[id="${findingId}"]`);
+  await expect(linked.locator("details").first()).toHaveAttribute("open", "");
+  await expect(linked).toContainText("Site is not served over HTTPS");
+  await expect(linked.getByRole("link", { name: /^Open ISSUE-\d+ for its status/ })).toBeVisible();
 
   // The project's Issues tab lists the tracked issues and links to the issue detail page.
   await page.goto(`/projects/${projectId}/issues`);

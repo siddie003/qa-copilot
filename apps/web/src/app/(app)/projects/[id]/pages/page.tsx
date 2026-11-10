@@ -16,6 +16,7 @@ const CATEGORIES = [
   ["responsive", "Responsive"],
   ["design", "Design"],
   ["content", "Content"],
+  ["design_quality", "Design quality"],
 ] as const;
 
 export default async function ProjectPagesPage({ params }: { params: Promise<{ id: string }> }) {
@@ -41,7 +42,8 @@ export default async function ProjectPagesPage({ params }: { params: Promise<{ i
     <>
       <p className="mb-3 text-sm text-muted">
         {pages.length} page{pages.length === 1 ? "" : "s"} from scan #{latest!.number}. Numbers are
-        scanner findings per category.
+        scanner findings per category. Pages marked “Your page link” were added on the References
+        page; the others were found by following links.
       </p>
       <div
         role="region"
@@ -74,6 +76,11 @@ export default async function ProjectPagesPage({ params }: { params: Promise<{ i
                     {p.title || p.url}
                   </div>
                   <div className="truncate text-xs text-subtle">{p.url}</div>
+                  {p.origin === "user" && (
+                    <span className="mt-1 inline-block rounded-full border border-border px-2 py-0.5 text-xs text-muted">
+                      Your page link
+                    </span>
+                  )}
                   {p.crawlError && <div className="text-xs text-danger">{p.crawlError}</div>}
                 </td>
                 <td className="px-4 py-3 tabular-nums">{p.httpStatus ?? "—"}</td>

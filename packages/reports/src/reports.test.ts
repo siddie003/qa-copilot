@@ -418,3 +418,52 @@ describe("finding values in Markdown and PDF", () => {
     expect(renderJson(d)).toContain(long);
   });
 });
+
+describe("plain-language block", () => {
+  it("adds the summary, fix steps and verification to every format", () => {
+    const d = buildReportData(source(), {
+      generatedAt: new Date("2026-10-11T00:00:00Z"),
+      generator: { name: "test", version: "0" },
+    });
+    const title = d.issues.find((i) => i.ruleId === "title-missing")!;
+    expect(title.plainLanguage.problem).toBe("The page has no title.");
+    expect(title.plainLanguage.nextAction).toMatch(/<title>/);
+    expect(title.plainLanguage.verify.join(" ")).toMatch(/Run a new scan/);
+    expect(title.plainLanguage.aiWritten).toEqual([]);
+    // Inconclusive issues ask for a check first.
+    const design = d.issues.find((i) => i.category === "design")!;
+    expect(design.plainLanguage.nextAction).toMatch(/^First check whether the problem is real/);
+
+    const md = renderMarkdown(d);
+    expect(md).toContain("**What is the problem?** The page has no title.");
+    expect(md).toContain("**Fix steps:**");
+    expect(md).toContain("**How to verify the fix:**");
+    expect(md).toContain("_Built-in guidance for this rule");
+    const html = renderHtml(d);
+    expect(html).toContain("<dt>What is the problem?</dt><dd>The page has no title.</dd>");
+    expect(html).toContain('<div class="label">How to verify the fix</div>');
+    expect(JSON.parse(renderJson(d)).issues[0].plainLanguage.steps.length).toBeGreaterThan(0);
+  });
+
+  it("uses grounded AI parts only and escapes them", () => {
+    const src = source();
+    src.issues[0]!.groundingStatus = "passed";
+    src.issues[0]!.explanation = { problem: `AI says ${INJECT}` };
+    const d = buildReportData(src, {
+      generatedAt: new Date("2026-10-11T00:00:00Z"),
+      generator: { name: "test", version: "0" },
+    });
+    const issue = d.issues.find((i) => i.ruleId === "title-missing")!;
+    expect(issue.plainLanguage.aiWritten).toEqual(["problem"]);
+    expect(renderHtml(d)).not.toContain("<script>alert(1)</script>");
+    expect(renderMarkdown(d)).not.toContain("<script>");
+    src.issues[0]!.groundingStatus = "rejected";
+    const rejected = buildReportData(src, {
+      generatedAt: new Date("2026-10-11T00:00:00Z"),
+      generator: { name: "test", version: "0" },
+    });
+    expect(rejected.issues.find((i) => i.ruleId === "title-missing")!.plainLanguage.problem).toBe(
+      "The page has no title.",
+    );
+  });
+});

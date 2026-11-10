@@ -1,5 +1,6 @@
 "use client";
 
+import { SOURCE_DESCRIPTIONS } from "@qa/core/explain";
 import { Plus, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
@@ -118,15 +119,20 @@ export function ProjectSettingsForm({ project, scanners }: Props) {
           <legend className="text-sm font-medium">Scanners</legend>
           <div className="mt-2 grid gap-2 sm:grid-cols-2">
             {scanners.map((s) => (
-              <label key={s.key} className="flex items-center gap-2 text-sm">
+              <label key={s.key} className="flex items-start gap-2 text-sm">
                 <input
                   type="checkbox"
                   name="scanners"
                   value={s.key}
                   defaultChecked={project.scanDefaults.scanners.includes(s.key)}
-                  className="size-4 accent-[var(--primary)]"
+                  className="mt-0.5 size-4 shrink-0 accent-[var(--primary)]"
                 />
-                {s.label}
+                <span>
+                  <span className="font-medium">{s.label}</span>
+                  {SOURCE_DESCRIPTIONS[s.key] && (
+                    <span className="block text-xs text-muted">{SOURCE_DESCRIPTIONS[s.key]}</span>
+                  )}
+                </span>
               </label>
             ))}
           </div>

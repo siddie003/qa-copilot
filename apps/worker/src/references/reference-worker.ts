@@ -29,10 +29,15 @@ export async function startReferenceWorker(
   const recover = async () => {
     const docs = await contentRepo.recoverStaleDocuments(rt.db, STALE_AFTER_MS);
     const refs = await referencesRepo.recoverStaleReferences(rt.db, STALE_AFTER_MS);
-    if (docs.length || refs.length)
+    if (docs.requeued.length || docs.failed.length || docs.reindex.length || refs.length)
       log.warn(
-        { documents: docs, references: refs },
-        "marked interrupted reference jobs as failed",
+        {
+          documentsResumed: docs.requeued,
+          documentsFailed: docs.failed,
+          documentsReindexed: docs.reindex,
+          references: refs,
+        },
+        "recovered interrupted reference jobs",
       );
   };
   await recover();

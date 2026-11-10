@@ -22,9 +22,44 @@ type Fix = (c: RemediationContext) => string;
 
 const quoted = (v: string | null) => (v ? `“${v}”` : "the approved text");
 
+/** Specific accessibility guidance, followed by the axe-core rule documentation when available. */
+const axe =
+  (text: string): Fix =>
+  (c) =>
+    c.helpUrl ? `${text} Rule documentation: ${c.helpUrl}` : text;
+
 const ACCESSIBILITY: Record<string, Fix> = {
   "focus-indicator-visible": () =>
     "Give every focusable element a clearly visible focus style, for example an outline or box-shadow in a :focus-visible rule, and never remove the browser's default outline (outline: none) without a replacement. Check the listed elements by moving through the page with the Tab key.",
+  "image-alt": axe(
+    'Add an alt attribute to each listed image: a short description of what the image shows or does for content images, and alt="" for purely decorative images. An image inside a link or button should describe where the link goes or what the button does.',
+  ),
+  "color-contrast": axe(
+    "Darken the text or lighten the background (or the reverse) until the contrast ratio reaches at least 4.5:1 for normal text and 3:1 for large text. Change the color in the shared style (design token or CSS variable) so every use is fixed.",
+  ),
+  "link-name": axe(
+    'Give each listed link text that says where it goes. For icon-only links add an aria-label (for example aria-label="Open the cart") or visually hidden text.',
+  ),
+  "button-name": axe(
+    'Give each listed button a visible text label, or an aria-label for icon-only buttons (for example aria-label="Close").',
+  ),
+  label: axe(
+    'Connect a visible label to each listed form field (<label for="field-id"> or by wrapping the field in the label). A placeholder is not a label.',
+  ),
+  "html-has-lang": axe(
+    'Add the page language to the <html> element, for example <html lang="en">.',
+  ),
+  "document-title": axe("Add a <title> element that describes the page to its <head>."),
+  "heading-order": axe(
+    "Use heading levels in order without skipping a level (h1, then h2, then h3); change the heading tags, not only their size.",
+  ),
+  "target-size": axe(
+    "Make the listed links and buttons at least 24×24 CSS pixels, or leave enough space around them so they do not overlap neighbouring targets.",
+  ),
+  region: axe(
+    "Place all page content inside landmark elements: <header>, <nav>, <main> and <footer> (or the matching ARIA roles).",
+  ),
+  "landmark-one-main": axe("Wrap the page's main content in a single <main> element."),
 };
 
 const accessibilityDefault: Fix = (c) =>
@@ -204,6 +239,27 @@ const CONTENT: Record<string, Fix> = {
     `Turn the text into a link or button as specified in the approved content: ${quoted(c.expected)}.`,
 };
 
+const DESIGN_QUALITY: Record<string, Fix> = {
+  "dq-heading-inconsistent": () =>
+    "Decide which of the measured styles is correct for this heading level and apply it to every heading of the level through one shared style or design token; remove one-off overrides.",
+  "dq-heading-hierarchy-inverted": () =>
+    "Make higher-level headings at least as large as lower-level ones, or change the heading levels so they match the visual importance (change the tag, not only the size).",
+  "dq-webfont-not-rendered": () =>
+    "Make the web font load: check the @font-face url() and format, that the font-family name matches exactly, that the font file contains the characters used, and that the font server allows the site's origin.",
+  "dq-font-not-approved": (c) =>
+    `Set the listed text in one of the uploaded brand fonts${c.expected ? ` (${c.expected.replace(/^One of the uploaded brand fonts: /, "")})` : ""}, or confirm that this font is allowed for it.`,
+  "dq-image-upscaled": () =>
+    "Serve the image at least at its displayed size (twice that for high-density screens), for example with srcset and sizes, or display it smaller.",
+  "dq-image-distorted": () =>
+    "Keep the image's proportions: remove fixed width/height values that do not match it, or use object-fit: cover to crop instead of stretching.",
+  "dq-spacing-off-scale": () =>
+    "Replace spacing values that are not on the design reference's spacing scale with the nearest scale value where the difference is not intentional, ideally through spacing tokens.",
+  "dq-alignment-near-miss": () =>
+    "Align the stacked elements on the same left edge, or make an intended indent clearly larger.",
+  "dq-spacing-inconsistent": () =>
+    "Space the repeated items evenly, preferably with the container's gap property instead of individual margins.",
+};
+
 const GENERIC: Fix = (c) =>
   c.expected
     ? `Change the listed elements so they meet the expected result: ${c.expected}.`
@@ -228,6 +284,8 @@ export function remediationFor(category: string, c: RemediationContext): string 
       return (DESIGN[r] ?? designMismatch)(c);
     case "content":
       return (CONTENT[r] ?? GENERIC)(c);
+    case "design_quality":
+      return (DESIGN_QUALITY[r] ?? GENERIC)(c);
     default:
       return GENERIC(c);
   }
@@ -243,4 +301,5 @@ export const CATALOGED_RULES: Record<string, string[]> = {
   responsive: Object.keys(RESPONSIVE),
   design: Object.keys(DESIGN),
   content: Object.keys(CONTENT),
+  design_quality: Object.keys(DESIGN_QUALITY),
 };

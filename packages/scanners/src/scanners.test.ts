@@ -1,6 +1,7 @@
 import type { FetchResult } from "@qa/crawler";
 import { describe, expect, it } from "vitest";
-import { classifyLink } from "./links";
+import { accessibilityScanner, DEFAULT_ACCESSIBILITY_MAX_PAGES } from "./accessibility";
+import { classifyLink, linksScanner } from "./links";
 import { performanceScanner } from "./performance";
 import { mergeAcrossViewports, responsiveScanner } from "./responsive";
 import { maskSecret, parseCsp, securityScanner } from "./security";
@@ -58,6 +59,7 @@ function page(over: PageInput = {}): PageRecord {
     loadDom: async () => dom ?? null,
     loadDesignStyles: async () => null,
     loadTextContent: async () => null,
+    loadQuality: async () => null,
   });
   return Object.assign(defaults, rest, {
     captures: captures.map((c) => Object.assign(captureDefaults(), c)),
@@ -140,11 +142,13 @@ describe("security scanner", () => {
         server: "nginx",
         "set-cookie": ["sid=[redacted]; Secure; HttpOnly; SameSite=Lax"],
       },
-      html: '<html><head><script src="https://cdn.other.com/a.js" integrity="sha384-x" crossorigin="anonymous"></script></head><body><form action="/save"></form></body></html>',
+      // Google Tag Manager updates its loader under the same URL: no integrity hash is possible.
+      html: '<html><head><script src="https://cdn.other.com/a.js" integrity="sha384-x" crossorigin="anonymous"></script><script async src="https://www.googletagmanager.com/gtag/js?id=G-1"></script></head><body><form action="/save"></form></body></html>',
     });
     const r = await securityScanner.run(ctx([good]));
     expect(r.status).toBe("completed");
     expect(r.findings).toEqual([]);
+    expect(r.checks.notes?.join(" ")).toMatch(/not expected for www\.googletagmanager\.com/);
     // The http→https probe could not be made offline: reported, not guessed.
     expect(r.checks.inconclusive.map((c) => c.check)).toContain("HTTP to HTTPS redirect");
   });
@@ -233,6 +237,19 @@ describe("seo scanner", () => {
     expect(r.checks.inconclusive.some((c) => c.check === "Sitemap")).toBe(true);
   });
 
+  it("names the Open Graph tags that are missing", async () => {
+    const r = await seoScanner.run(
+      ctx([
+        page({
+          html: '<html lang="en"><head><title>A good descriptive title</title><meta property="og:title" content="T"><meta property="og:description" content="D"></head><body><h1>x</h1></body></html>',
+        }),
+      ]),
+    );
+    const og = r.findings.find((f) => f.ruleId === "open-graph-missing")!;
+    expect(og.title).toBe("Open Graph tag missing: og:image");
+    expect(og.actual).toBe("Missing: og:image");
+  });
+
   it("treats noindex as potential (it may be intentional)", async () => {
     const r = await seoScanner.run(ctx([page({ responseHeaders: { "x-robots-tag": "noindex" } })]));
     expect(r.findings.find((f) => f.ruleId === "noindex")!.verdict).toBe("potential");
@@ -293,8 +310,75 @@ describe("link classification", () => {
       "redirect",
     ],
     [res({}), "ok"],
+    // LinkedIn's refusal code for automated requests: not evidence that the link is broken.
+    [res({ status: 999 }), "inconclusive"],
   ])("%#", (r, kind) => {
     expect(classifyLink(r).kind).toBe(kind);
+  });
+});
+
+describe("failed page resources", () => {
+  const request = (over: { url: string; resourceType: string } & Record<string, unknown>) => ({
+    method: "GET",
+    status: null,
+    transferSize: null,
+    decodedSize: null,
+    durationMs: null,
+    failureText: null,
+    fromCache: null,
+    isMixedContent: false,
+    ...over,
+  });
+
+  it("asks the server again when the browser only reports its own error", async () => {
+    // The unit-test fetcher has no network: the server's answer is unknown, so the stopped
+    // request is a potential problem, not a confirmed missing file.
+    const p = page({
+      captures: [
+        {
+          requests: [
+            request({
+              url: "https://example.com/theme/animation.css",
+              resourceType: "stylesheet",
+              failureText: "net::ERR_ABORTED",
+            }),
+            request({
+              url: "https://example.com/img/missing.svg",
+              resourceType: "image",
+              status: 404,
+            }),
+          ],
+        },
+      ],
+    });
+    const r = await linksScanner.run(ctx([p]));
+    const failed = r.findings.filter((f) => f.ruleId === "failed-resource");
+    expect(failed.find((f) => f.actual === "HTTP 404")?.verdict).toBe("confirmed");
+    const css = failed.find((f) => f.fingerprintKey === "https://example.com/theme/animation.css");
+    expect(css?.verdict).toBe("potential");
+    expect(css?.evidence[0]!.data).toMatchObject({
+      browserResult: "Request failed: net::ERR_ABORTED",
+      serverStatus: null,
+    });
+  });
+
+  it("does not report a third-party tracking pixel the browser refused as a non-image", async () => {
+    const p = page({
+      captures: [
+        {
+          requests: [
+            request({
+              url: "https://api.tracker.example.net/pixel/sync",
+              resourceType: "image",
+              failureText: "net::ERR_BLOCKED_BY_ORB",
+            }),
+          ],
+        },
+      ],
+    });
+    const r = await linksScanner.run(ctx([p]));
+    expect(r.findings.filter((f) => f.ruleId === "failed-resource")).toEqual([]);
+    expect(r.checks.notes?.join(" ")).toMatch(/Tracking pixels .*api\.tracker\.example\.net/);
   });
 });
 
@@ -447,5 +531,44 @@ describe("finding contract", () => {
       findingDraftSchema.safeParse({ ...base, evidence: [{ kind: "document", data: { a: 1 } }] })
         .success,
     ).toBe(true);
+  });
+});
+
+describe("accessibility scanner limits", () => {
+  it("analyzes up to the configured page limit and reports pages it could not reach in time", async () => {
+    const pages = [page(), page(), page()];
+    let opened = 0;
+    const r = await accessibilityScanner.run(
+      ctx(pages, {
+        // The time budget is already used up: no page may be opened.
+        limits: { accessibilityMaxPages: 2, deadline: Date.now() - 1 },
+        openPage: async () => {
+          opened += 1;
+          throw new Error("must not be opened");
+        },
+      }),
+    );
+    expect(opened).toBe(0);
+    expect(r.status).toBe("inconclusive");
+    expect(r.statusReason).toMatch(/time budget was used up/);
+    const reasons = r.checks.inconclusive.map((c) => [c.pageUrl, c.reason]);
+    expect(reasons).toEqual([
+      [
+        pages[2]!.url,
+        "Not analyzed: accessibility checks are limited to the first 2 pages of a scan (SCAN_ACCESSIBILITY_MAX_PAGES)",
+      ],
+      ...pages
+        .slice(0, 2)
+        .map((p) => [
+          p.url,
+          "Not analyzed at desktop: the accessibility step's time budget (80% of SCAN_SCANNER_TIMEOUT_MS) was used up",
+        ]),
+    ]);
+    // The page-level label keeps these issues out of "resolved" in scan comparisons.
+    expect(r.checks.inconclusive.every((c) => c.check === "axe-core analysis")).toBe(true);
+  });
+
+  it("keeps the former 25-page default when no limit is passed", () => {
+    expect(DEFAULT_ACCESSIBILITY_MAX_PAGES).toBe(25);
   });
 });

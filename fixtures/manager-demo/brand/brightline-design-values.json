@@ -1,0 +1,63 @@
+{
+  "typography": {
+    "h1": {
+      "fontFamily": "Geist",
+      "fontSize": 48,
+      "fontWeight": 700,
+      "lineHeight": 56,
+      "color": "#111827"
+    },
+    "h2": {
+      "fontFamily": "Geist",
+      "fontSize": 32,
+      "fontWeight": 600,
+      "lineHeight": 40,
+      "color": "#111827"
+    },
+    "h3": {
+      "fontFamily": "Geist",
+      "fontSize": 24,
+      "fontWeight": 600,
+      "lineHeight": 32,
+      "color": "#111827"
+    },
+    "h4": {
+      "fontFamily": "Geist",
+      "fontSize": 20,
+      "fontWeight": 600,
+      "lineHeight": 28,
+      "color": "#111827"
+    },
+    "body": {
+      "fontFamily": "Geist",
+      "fontSize": 16,
+      "fontWeight": 400,
+      "lineHeight": 24,
+      "color": "#1f2937"
+    },
+    "link": { "fontFamily": "Geist", "color": "#1a56db" },
+    "button": { "fontFamily": "Geist", "fontSize": 16, "fontWeight": 600 }
+  },
+  "colors": {
+    "Brand blue": { "value": "#1a56db" },
+    "Primary text": { "value": "#1f2937", "role": "text" },
+    "Heading": { "value": "#111827" },
+    "Page background": { "value": "#ffffff", "role": "background" },
+    "Header background": { "value": "#f3f4f6", "role": "headerBackground" },
+    "Footer background": { "value": "#111827", "role": "footerBackground" },
+    "Border grey": { "value": "#e5e7eb" }
+  },
+  "components": {
+    "buttonPrimary": {
+      "background": "#1a56db",
+      "color": "#ffffff",
+      "borderRadius": 8,
+      "paddingX": 24,
+      "paddingY": 12,
+      "fontSize": 16,
+      "fontWeight": 600
+    }
+  },
+  "layout": { "containerMaxWidth": { "value": 1200, "selector": "main" } },
+  "spacing": { "scale": { "values": [4, 8, 16, 24, 32, 48, 64] } }
+}

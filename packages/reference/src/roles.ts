@@ -9,10 +9,11 @@ export function typographyRoleForName(name: string): TypographyRole | null {
   const n = ` ${name.toLowerCase().replace(/[/_\-.,|]+/g, " ")} `;
   const h = n.match(/\s(?:h|heading\s?|headline\s?)([1-6])\s/);
   if (h) return `h${h[1]}` as TypographyRole;
-  if (/\s(caption|small|overline|label|footnote|xs|sm)\s/.test(n)) return null;
-  if (/\s(body|paragraph|copy)\s/.test(n)) return "body";
+  if (/\s(caption|small|overline|label|footnote|xxs|xs|sm)\s/.test(n)) return null;
+  // Link and button names win over "body": libraries often group them as "Body/CTA" or "Body/Link".
   if (/\slinks?\s/.test(n)) return "link";
   if (/\s(button|btn|cta)\s/.test(n)) return "button";
+  if (/\s(body|paragraph|copy)\s/.test(n)) return "body";
   return null;
 }
 

@@ -18,11 +18,14 @@ export interface InterpretationBatch {
   category: string;
   groups: PreparedGroup[];
   input: string;
+  /** A single group whose input alone exceeds the limit: not sent (it keeps the scanners' wording). */
+  oversize?: boolean;
 }
 
 /**
  * Splits the groups into requests: one category per batch (batching by category), at most
- * MAX_GROUPS_PER_BATCH groups and MAX_BATCH_INPUT_CHARS characters of input each.
+ * MAX_GROUPS_PER_BATCH groups and MAX_BATCH_INPUT_CHARS characters of input each (both
+ * configurable; the character limit follows AI_MAX_INPUT_TOKENS in the worker).
  */
 export function planBatches(
   prepared: PreparedGroup[],
@@ -35,8 +38,15 @@ export function planBatches(
     byCategory.set(p.group.category, [...(byCategory.get(p.group.category) ?? []), p]);
   const batches: InterpretationBatch[] = [];
   const flush = (category: string, groups: PreparedGroup[]) => {
-    if (groups.length)
-      batches.push({ index: batches.length, category, groups, input: buildBatchInput(groups) });
+    if (!groups.length) return;
+    const input = buildBatchInput(groups);
+    batches.push({
+      index: batches.length,
+      category,
+      groups,
+      input,
+      ...(input.length > maxChars ? { oversize: true } : {}),
+    });
   };
   for (const [category, list] of byCategory) {
     let current: PreparedGroup[] = [];
@@ -72,6 +82,8 @@ export interface BatchResult {
   stopReason: string | null;
   fallbackUsed: boolean;
   inputChars: number;
+  /** HTTP attempts including retries (null when not sent). */
+  attempts?: number | null;
 }
 
 export interface InterpretOptions {
@@ -107,10 +119,23 @@ export async function interpretGroups(opts: InterpretOptions): Promise<BatchResu
     stopReason: null,
     fallbackUsed: false,
     inputChars: b.input.length,
+    attempts: null,
   });
   const worker = async () => {
     while (next < batches.length) {
       const b = batches[next++]!;
+      if (b.oversize) {
+        results[b.index] = {
+          ...base(b),
+          status: "skipped",
+          error: {
+            code: "too_large_input",
+            message: `Not sent: this issue's data (${b.input.length} characters) exceeds the request size limit (AI_MAX_INPUT_TOKENS)`,
+          },
+        };
+        await opts.onBatch?.(results[b.index]!);
+        continue;
+      }
       if (fatal || opts.signal?.aborted) {
         results[b.index] = {
           ...base(b),
@@ -144,6 +169,7 @@ export async function interpretGroups(opts: InterpretOptions): Promise<BatchResu
           model: r.model,
           stopReason: r.stopReason,
           fallbackUsed: r.fallbackUsed,
+          attempts: r.attempts ?? 1,
         };
       } catch (err) {
         const e =

@@ -21,6 +21,8 @@ const docsRoute = await import("@/app/api/v1/projects/[id]/content-documents/rou
 const docRoute = await import("@/app/api/v1/content-documents/[id]/route");
 const blocksRoute = await import("@/app/api/v1/content-documents/[id]/blocks/route");
 const retryRoute = await import("@/app/api/v1/content-documents/[id]/retry/route");
+const cancelDocRoute = await import("@/app/api/v1/content-documents/[id]/cancel/route");
+const searchRoute = await import("@/app/api/v1/projects/[id]/content-search/route");
 const specRoute = await import("@/app/api/v1/projects/[id]/design-spec/route");
 const draftRoute = await import("@/app/api/v1/projects/[id]/design-spec/draft/route");
 const confirmRoute = await import("@/app/api/v1/projects/[id]/design-spec/draft/confirm/route");
@@ -28,6 +30,7 @@ const guidelineRoute = await import("@/app/api/v1/projects/[id]/guideline-docume
 const referencesRoute = await import("@/app/api/v1/projects/[id]/references/route");
 const referenceRoute = await import("@/app/api/v1/projects/[id]/references/[refId]/route");
 const refreshRoute = await import("@/app/api/v1/projects/[id]/references/[refId]/refresh/route");
+const refCancelRoute = await import("@/app/api/v1/projects/[id]/references/[refId]/cancel/route");
 const tokenRoute = await import("@/app/api/v1/projects/[id]/figma-token/route");
 const scansRoute = await import("@/app/api/v1/projects/[id]/scans/route");
 const cancelRoute = await import("@/app/api/v1/scans/[id]/cancel/route");
@@ -207,6 +210,79 @@ describe.skipIf(!hasTestDb)("references API (real database)", () => {
     expect(retry.status).toBe(409); // only failed documents can be retried
   });
 
+  it("searches indexed approved content and cancels/continues processing, owner-scoped", async () => {
+    const search = (cookie: string, q: string, extra = "") =>
+      searchRoute.GET(
+        req(
+          `/api/v1/projects/${projectId}/content-search?q=${encodeURIComponent(q)}${extra}`,
+          cookie,
+        ),
+        p(projectId),
+      );
+    const hits = await (await search(alice, "contact our team")).json();
+    expect(hits.results.length).toBeGreaterThan(0);
+    expect(hits.results[0]).toMatchObject({ filename: "approved.md" });
+    expect(hits.results[0].excerpt.toLowerCase()).toContain("contact");
+    expect(hits.results[0]).not.toHaveProperty("projectId");
+    expect((await (await search(alice, "! & |")).json()).results).toEqual([]);
+    expect((await search(bob, "contact")).status).toBe(404);
+    expect((await search(alice, "contact", "&document=not-a-uuid")).status).toBe(404);
+
+    // Cancel: a queued document at once; parsed ones cannot be cancelled; others' never.
+    const res = await docsRoute.POST(
+      upload(
+        `/api/v1/projects/${projectId}/content-documents`,
+        alice,
+        "later.txt",
+        Buffer.from("Later text."),
+      ),
+      p(projectId),
+    );
+    const doc = await res.json();
+    created.push(doc.id);
+    expect(
+      (
+        await cancelDocRoute.POST(
+          req(`/api/v1/content-documents/${doc.id}/cancel`, bob, "POST"),
+          p(doc.id),
+        )
+      ).status,
+    ).toBe(404);
+    const cancelled = await cancelDocRoute.POST(
+      req(`/api/v1/content-documents/${doc.id}/cancel`, alice, "POST"),
+      p(doc.id),
+    );
+    expect(cancelled.status).toBe(202);
+    expect(await cancelled.json()).toMatchObject({ parseStatus: "cancelled" });
+    expect(
+      (
+        await cancelDocRoute.POST(
+          req(`/api/v1/content-documents/${doc.id}/cancel`, alice, "POST"),
+          p(doc.id),
+        )
+      ).status,
+    ).toBe(409);
+    // Continue processing a cancelled document.
+    const retried = await retryRoute.POST(
+      req(`/api/v1/content-documents/${doc.id}/retry`, alice, "POST"),
+      p(doc.id),
+    );
+    expect(retried.status).toBe(202);
+    await drain();
+    const list = await (
+      await docsRoute.GET(
+        req(`/api/v1/projects/${projectId}/content-documents`, alice),
+        p(projectId),
+      )
+    ).json();
+    expect(list.items.find((d: { id: string }) => d.id === doc.id)).toMatchObject({
+      parseStatus: "parsed",
+      outcome: "completed",
+      chunkCount: 1,
+      coverage: expect.objectContaining({ unit: "document", blocks: 1 }),
+    });
+  });
+
   it("saves, drafts, confirms and discards design references", async () => {
     const invalid = await specRoute.PUT(
       req(`/api/v1/projects/${projectId}/design-spec`, alice, "PUT", {
@@ -326,6 +402,24 @@ describe.skipIf(!hasTestDb)("references API (real database)", () => {
       ).status,
     ).toBe(409);
 
+    // Cancel: queued → cancelled at once; only the owner; then "Fetch again" queues it again.
+    const cancel = (cookie: string) =>
+      refCancelRoute.POST(
+        req(`/api/v1/projects/${projectId}/references/${ref.id}/cancel`, cookie, "POST"),
+        pr(projectId, ref.id),
+      );
+    expect((await cancel(bob)).status).toBe(404);
+    const cancelled = await cancel(alice);
+    expect(cancelled.status).toBe(202);
+    expect(await cancelled.json()).toMatchObject({ status: "cancelled", resumable: false });
+    expect((await cancel(alice)).status).toBe(409);
+    const again = await refreshRoute.POST(
+      req(`/api/v1/projects/${projectId}/references/${ref.id}/refresh`, alice, "POST"),
+      pr(projectId, ref.id),
+    );
+    expect(again.status).toBe(202);
+    expect(await again.json()).toMatchObject({ status: "pending", attempts: 0 });
+
     const put = await tokenRoute.PUT(
       req(`/api/v1/projects/${projectId}/figma-token`, alice, "PUT", {
         token: "figd_super_secret_token",
@@ -393,7 +487,15 @@ describe.skipIf(!hasTestDb)("references API (real database)", () => {
     expect(row!.contentSnapshotHash).toMatch(/^[0-9a-f]{64}$/);
     expect(row!.configSnapshot).toMatchObject({
       designSpecVersion: 2,
-      contentDocuments: [expect.objectContaining({ filename: "approved.md", blockCount: 13 })],
+      contentDocuments: [
+        expect.objectContaining({
+          filename: "approved.md",
+          blockCount: 13,
+          outcome: "completed",
+          coverageNote: null,
+        }),
+        expect.objectContaining({ filename: "later.txt", blockCount: 1 }),
+      ],
     });
     const steps = await getDb()
       .select()

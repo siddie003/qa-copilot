@@ -2,6 +2,7 @@ import {
   categoryLabel,
   clip,
   GROUNDING_LABELS,
+  PART_STATUS_LABELS,
   SEVERITY_LABELS,
   STATUS_LABELS,
   STEP_STATUS_LABELS,
@@ -46,6 +47,14 @@ export function mdCode(value: string | null | undefined): string {
 }
 
 const pct = (n: number) => `${Math.round(n * 100)}%`;
+
+/** Guide text: `code` spans become inline code, everything else is escaped text. */
+export function mdRich(value: string): string {
+  return value
+    .split(/(`[^`]+`)/g)
+    .map((p) => (/^`[^`]+`$/.test(p) ? mdCode(p.slice(1, -1)) : mdText(p)))
+    .join("");
+}
 
 export function formatDuration(ms: number | null): string {
   if (ms === null) return "—";
@@ -107,7 +116,22 @@ function issueSection(i: ReportIssue): string {
     out.push("> Unable to verify from available evidence. Review manually before acting.\n");
   else if (i.verdict === "potential")
     out.push("> Needs review: the evidence suggests a problem but does not confirm it.\n");
-  out.push(mdBlock(i.description));
+  const p = i.plainLanguage;
+  out.push(`**What is the problem?** ${mdRich(p.problem)}  `);
+  out.push(`**Why does it matter?** ${mdRich(p.whyItMatters)}  `);
+  out.push(`**What should I do next?** ${mdRich(p.nextAction)}`);
+  out.push("");
+  out.push("**Fix steps:**", "");
+  p.steps.forEach((s, n) => out.push(`${n + 1}. ${mdRich(s)}`));
+  out.push("");
+  out.push("**How to verify the fix:**", "");
+  p.verify.forEach((s, n) => out.push(`${n + 1}. ${mdRich(s)}`));
+  out.push("");
+  out.push(
+    `_${p.aiWritten.length ? `Written by AI and checked against the evidence: ${p.aiWritten.join(", ")}; the rest is built-in guidance` : "Built-in guidance for this rule"}, filled in with this issue's scan data. Example code is on the issue page._`,
+  );
+  out.push("");
+  out.push("**Scanner description:**", "", mdBlock(i.description));
   out.push("");
   out.push("**Affected pages:**");
   if (!i.affectedUrls.length) out.push("Site-wide");
@@ -121,7 +145,7 @@ function issueSection(i: ReportIssue): string {
   if (i.severityRationale) out.push(`**Severity rationale:** ${mdText(i.severityRationale)}  `);
   if (i.affectedElement || i.expected || i.actual || i.severityRationale) out.push("");
   if (i.recommendation) {
-    out.push("**How to fix:**", "", mdBlock(i.recommendation), "");
+    out.push("**Recommendation stored with the issue:**", "", mdBlock(i.recommendation), "");
   }
   out.push(`**Source findings (${i.findings.length}):**`, "");
   for (const f of i.findings) out.push(findingLine(f, i));
@@ -242,6 +266,11 @@ export function renderMarkdown(d: ReportData): string {
             x.error ? `Error: ${x.error}` : x.statusReason,
             x.comparison
               ? `matched ${x.comparison.matched}, mismatched ${x.comparison.confirmedMismatch}, needs review ${x.comparison.potentialMismatch}, unable to verify ${x.comparison.unableToVerify}`
+              : null,
+            x.parts.length
+              ? x.parts
+                  .map((p) => `${p.label}: ${PART_STATUS_LABELS[p.status] ?? p.status}`)
+                  .join("; ")
               : null,
             x.tool,
           ]

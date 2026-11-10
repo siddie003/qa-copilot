@@ -2,6 +2,8 @@
 // (see page-scripts.ts: tsx/esbuild rewrites named functions with a `__name()` helper that does
 // not exist in the browser). They only read the page; nothing is modified.
 
+import { IN_CONSENT } from "./consent";
+
 const HELPERS = `
   const cssPath = (el) => {
     if (!(el instanceof Element)) return null;
@@ -29,6 +31,7 @@ const HELPERS = `
   const box = (el) => { const r = el.getBoundingClientRect(); return { x: Math.round(r.left + scrollX), y: Math.round(r.top + scrollY), width: Math.round(r.width), height: Math.round(r.height) }; };
   const clean = (s, max) => (s || "").replace(/\\s+/g, " ").trim().slice(0, max);
   const query = (sel) => { try { return Array.prototype.slice.call(document.querySelectorAll(sel)); } catch (e) { return null; } };
+  ${IN_CONSENT}
 `;
 
 /**
@@ -57,7 +60,7 @@ export function designStylesScript(explicitSelectors: string[]): string {
   };
   const outside = (el, sel) => !el.closest(sel);
   const sampleRole = (elements, method, selector) => {
-    const els = (elements || []).filter(isVisible).slice(0, 300);
+    const els = (elements || []).filter((e) => isVisible(e) && !inConsent(e)).slice(0, 300);
     const groups = new Map();
     for (const el of els) {
       const styles = stylesOf(el);
@@ -81,7 +84,9 @@ export function designStylesScript(explicitSelectors: string[]): string {
 
   const roles = {};
   for (let i = 1; i <= 6; i++) roles["h" + i] = sampleRole(query("h" + i), "semantic", "h" + i);
-  const body = firstNonEmpty([["main p, article p, [role=main] p", notChrome], ["body p", notChrome]]);
+  // Paragraph elements nested in headings, buttons or links take their style from those.
+  const bodyText = (e) => notChrome(e) && !e.closest("h1, h2, h3, h4, h5, h6, button, [role=button], a, label");
+  const body = firstNonEmpty([["main p, article p, [role=main] p", bodyText], ["body p", bodyText]]);
   roles.body = sampleRole(body.els, "semantic", body.sel);
   const link = firstNonEmpty([["main p a[href], main li a[href], article p a[href], [role=main] p a[href]", (e) => notChrome(e) && !buttonLike(e)], ["body p a[href]", (e) => notChrome(e) && !buttonLike(e)]]);
   roles.link = sampleRole(link.els, "semantic", link.sel);
@@ -115,7 +120,7 @@ export function designStylesScript(explicitSelectors: string[]): string {
   const all = Array.prototype.slice.call(document.body ? document.body.querySelectorAll("*") : [], 0, 4000);
   for (const el of all) {
     // Native form controls carry the browser's default colors, not the site's palette.
-    if (!isVisible(el) || el.closest("button, input, select, textarea, option")) continue;
+    if (!isVisible(el) || inConsent(el) || el.closest("button, input, select, textarea, option")) continue;
     const cs = getComputedStyle(el);
     const ownText = Array.prototype.some.call(el.childNodes, (n) => n.nodeType === 3 && n.textContent.trim().length > 0);
     if (ownText) add(textColors, cs.color, el);

@@ -34,8 +34,22 @@ export class ExtractionError extends Error {
   }
 }
 
-export const MAX_BLOCKS = 5_000;
-const MAX_BLOCK_CHARS = 5_000;
+/**
+ * Version of the extraction code. Stored with each document; blocks are reused (identical
+ * uploads) or resumed (interrupted PDFs) only when it matches. Bump when output changes.
+ */
+export const EXTRACTOR_VERSION = "2";
+
+/** Default block cap per document (the worker passes DOCUMENT_MAX_BLOCKS). */
+export const MAX_BLOCKS = 50_000;
+export const MAX_BLOCK_CHARS = 5_000;
+
+/** What a collector needs to continue a document in a later batch or run. */
+export interface CollectorState {
+  nextIndex: number;
+  pageHint: string | null;
+  headings: Array<{ level: number; text: string }>;
+}
 
 const MARKER = /^(?:page|url|web\s*page|screen)\s*[:=]\s*([^.!?]{1,80})$/i;
 const COMMENT_MARKER = /^<!--\s*(?:page|url)\s*[:=]\s*(.{1,200}?)\s*-->$/i;
@@ -81,13 +95,55 @@ export function safeHref(href: string | null | undefined): string | null {
   return null;
 }
 
-/** Collects blocks in document order, tracking page markers and the heading path. */
+/**
+ * Collects blocks in document order, tracking page markers and the heading path. Blocks can be
+ * taken out in batches (`drain`) and the collector continued later from `state()`.
+ */
 export class BlockCollector {
-  readonly blocks: ExtractedBlock[] = [];
+  blocks: ExtractedBlock[] = [];
   readonly warnings: string[] = [];
   truncated = false;
   private pageHint: string | null = null;
   private headings: Array<{ level: number; text: string }> = [];
+  /** Index of the first block in `blocks` (blocks drained earlier come before it). */
+  private offset = 0;
+  private shortened = 0;
+  readonly maxBlocks: number;
+
+  constructor(opts: { state?: CollectorState | null; maxBlocks?: number } = {}) {
+    this.maxBlocks = opts.maxBlocks ?? MAX_BLOCKS;
+    if (opts.state) {
+      this.offset = opts.state.nextIndex;
+      this.pageHint = opts.state.pageHint;
+      this.headings = opts.state.headings.map((h) => ({ ...h }));
+    }
+  }
+
+  /** Blocks shortened to MAX_BLOCK_CHARS so far. */
+  get shortenedCount() {
+    return this.shortened;
+  }
+
+  /** Total blocks collected so far, including drained ones. */
+  get count() {
+    return this.offset + this.blocks.length;
+  }
+
+  state(): CollectorState {
+    return {
+      nextIndex: this.count,
+      pageHint: this.pageHint,
+      headings: this.headings.map((h) => ({ ...h })),
+    };
+  }
+
+  /** Returns the blocks collected since the last drain and forgets them. */
+  drain(): ExtractedBlock[] {
+    const out = this.blocks;
+    this.offset += out.length;
+    this.blocks = [];
+    return out;
+  }
 
   /** Returns true if the text was a page marker (consumed, not stored as content). */
   marker(text: string): boolean {
@@ -105,13 +161,14 @@ export class BlockCollector {
   ) {
     let text = canonicalText(rawText);
     if (!text) return;
-    if (this.blocks.length >= MAX_BLOCKS) {
+    if (this.count >= this.maxBlocks) {
       this.truncated = true;
       return;
     }
     if (text.length > MAX_BLOCK_CHARS) {
       text = text.slice(0, MAX_BLOCK_CHARS);
-      if (this.warnings.length < 20)
+      this.shortened += 1;
+      if (this.shortened === 1)
         this.warnings.push(`A block longer than ${MAX_BLOCK_CHARS} characters was shortened.`);
     }
     const level = opts.level ?? null;
@@ -126,7 +183,7 @@ export class BlockCollector {
       href: safeHref(opts.href),
       pageHint: this.pageHint,
       location: {
-        index: this.blocks.length,
+        index: this.count,
         ...(opts.page ? { page: opts.page } : {}),
         ...(opts.line ? { line: opts.line } : {}),
         ...(this.headings.length ? { headingPath: this.headings.map((h) => h.text) } : {}),
@@ -150,9 +207,24 @@ export class BlockCollector {
     });
   }
 
-  result(pages?: number): ExtractionResult {
+  /** Final warnings: shortened blocks are counted once, the block cap is stated. */
+  finalWarnings(): string[] {
+    const out = [...this.warnings];
+    if (this.shortened > 1) {
+      const i = out.findIndex((w) => w.startsWith("A block longer than"));
+      if (i >= 0)
+        out[i] =
+          `${this.shortened} blocks longer than ${MAX_BLOCK_CHARS} characters were shortened.`;
+    }
     if (this.truncated)
-      this.warnings.push(`Only the first ${MAX_BLOCKS} blocks of the document were kept.`);
+      out.push(
+        `Only the first ${this.maxBlocks} blocks of the document were kept; the rest was not read (DOCUMENT_MAX_BLOCKS).`,
+      );
+    return out;
+  }
+
+  result(pages?: number): ExtractionResult {
+    this.warnings.splice(0, this.warnings.length, ...this.finalWarnings());
     return {
       blocks: this.blocks,
       meta: { ...(pages ? { pages } : {}), warnings: this.warnings, truncated: this.truncated },

@@ -79,6 +79,16 @@ describe("document upload validation", () => {
     expect(check("a.md", Buffer.from([0xc3, 0x28]))).toMatchObject({ ok: false, code: "ENCODING" });
   });
 
+  it("accepts UTF-16 text only with a byte-order mark, and only when it decodes", () => {
+    const le = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from("Hello", "utf16le")]);
+    expect(check("a.txt", le)).toMatchObject({ ok: true, kind: "txt" });
+    // Without a BOM the zero bytes are binary data.
+    expect(check("a.txt", Buffer.from("Hello", "utf16le"))).toMatchObject({ code: "ENCODING" });
+    // An unpaired surrogate is not valid UTF-16.
+    const bad = Buffer.from([0xff, 0xfe, 0x00, 0xd8, 0x41, 0x00]);
+    expect(check("a.md", bad)).toMatchObject({ ok: false, code: "ENCODING" });
+  });
+
   it("guards against zip bombs before any parser runs", () => {
     const bomb = buildZip({
       "[Content_Types].xml": "<Types/>",

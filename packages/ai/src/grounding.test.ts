@@ -424,3 +424,73 @@ describe("issue drafts", () => {
       });
   });
 });
+
+describe("grounding: plain-language explanation", () => {
+  const explanation = () => ({
+    problem:
+      "Two text elements on the products page are hard to read: p.muted uses #c4c4c4 on #ffffff.",
+    impact: "Visitors with low vision may not be able to read the text.",
+    nextStep: "Darken the text color of p.muted and span.note.",
+    steps: [
+      "Open http://localhost:4100/products and inspect p.muted.",
+      "Darken its text color until the contrast reaches 4.5:1.",
+    ],
+    caveats: ["Check the new color against the brand palette."],
+  });
+
+  it("keeps an explanation whose facts are all in the evidence", () => {
+    const { result } = ground((i) => (i.explanation = explanation()));
+    expect(result.status).toBe("passed");
+    expect(result.fields.explanation).toEqual(explanation());
+    for (const k of ["problem", "impact", "nextStep", "steps", "caveats"])
+      expect(check(result, `field:explanation.${k}`)[0]!.passed).toBe(true);
+  });
+
+  it("replaces unsupported parts with the built-in guide and drops fix steps as a whole", () => {
+    const { result } = ground((i) => {
+      i.explanation = explanation();
+      i.explanation.problem = "The text uses #123456 on a white background.";
+      i.explanation.steps[1] = "Change it to #000000 as required by https://example.test/rules.";
+      i.explanation.caveats.push("Do not exceed 7.2:1.");
+    });
+    expect(result.status).toBe("partial");
+    expect(result.fields.explanation).toEqual({
+      impact: explanation().impact,
+      nextStep: explanation().nextStep,
+      caveats: explanation().caveats,
+    });
+    expect(check(result, "field:explanation.problem")[0]!.detail).toMatchObject({
+      unsupported: expect.arrayContaining(["#123456"]),
+      replacedWith: "built-in fix guide",
+    });
+    expect(check(result, "field:explanation.steps")[0]!.detail).toMatchObject({
+      failedItems: 1,
+      replacedWith: "built-in fix guide",
+    });
+    expect(check(result, "field:explanation.caveats")[0]!.detail).toMatchObject({
+      failedItems: 1,
+      replacedWith: "supported items only",
+    });
+  });
+
+  it("enforces length limits, ignores a missing explanation and discards it with rejected text", () => {
+    const long = ground((i) => {
+      i.explanation = explanation();
+      i.explanation.impact = "x".repeat(501);
+    });
+    expect(long.result.fields.explanation?.impact).toBeUndefined();
+    expect(check(long.result, "field:explanation.impact")[0]!.detail).toMatchObject({
+      reason: "longer than 500 characters",
+    });
+    const none = ground((i) => (i.explanation = null));
+    expect(none.result.status).toBe("passed");
+    expect(none.result.fields.explanation).toBeNull();
+    expect(none.result.checks.some((c) => c.checkType.startsWith("field:explanation"))).toBe(false);
+    const rejected = ground((i) => {
+      i.explanation = explanation();
+      i.sourceFindingIds = ["A11Y-999"];
+    });
+    expect(rejected.result.status).toBe("rejected");
+    expect(rejected.result.fields.explanation).toBeNull();
+  });
+});

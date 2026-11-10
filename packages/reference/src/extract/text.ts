@@ -7,8 +7,11 @@ const BULLET = /^\s*(?:[-*•·‣◦]|\d{1,3}[.)])\s+(.+)$/;
  * a short single-line paragraph without closing punctuation followed by more text is treated as
  * a heading too. Bullet lines become list items.
  */
-export function extractPlainText(input: string): ExtractionResult {
-  const c = new BlockCollector();
+export function extractPlainText(
+  input: string,
+  opts: { maxBlocks?: number } = {},
+): ExtractionResult {
+  const c = new BlockCollector({ maxBlocks: opts.maxBlocks });
   const lines = input.replace(/^\uFEFF/, "").split(/\r\n|\r|\n/);
   const paragraphs: Array<{ lines: string[]; start: number }> = [];
   let current: { lines: string[]; start: number } | null = null;

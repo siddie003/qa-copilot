@@ -1,7 +1,15 @@
 import type { ScanDefaults } from "@qa/core";
 import { and, count, desc, eq, ilike, inArray, isNull, or, sql } from "drizzle-orm";
 import type { Database } from "../client";
-import { issueTrack, project, projectSecret, referenceSource, scan, scannerRun } from "../schema";
+import {
+  issueTrack,
+  project,
+  projectPageLink,
+  projectSecret,
+  referenceSource,
+  scan,
+  scannerRun,
+} from "../schema";
 import { notifyReferenceQueued } from "./content";
 import type { FigmaReferenceValues } from "./references";
 
@@ -183,9 +191,13 @@ export interface CreateProjectValues {
 export async function createProject(
   db: Database,
   ownerId: string,
-  values: CreateProjectValues & { figma?: FigmaReferenceValues },
+  values: CreateProjectValues & {
+    figma?: FigmaReferenceValues;
+    /** Validated, de-duplicated page links (url + duplicate key), stored with the project. */
+    pageLinks?: Array<{ url: string; linkKey: string }>;
+  },
 ) {
-  const { figma, ...projectValues } = values;
+  const { figma, pageLinks, ...projectValues } = values;
   const row = await db.transaction(async (tx) => {
     const [created] = await tx
       .insert(project)
@@ -195,6 +207,19 @@ export async function createProject(
       await tx
         .insert(referenceSource)
         .values({ projectId: created!.id, kind: "figma", status: "pending", ...figma });
+    if (pageLinks?.length)
+      await tx
+        .insert(projectPageLink)
+        // now() is the same for the whole transaction: offset each row so the list keeps the
+        // order the user entered.
+        .values(
+          pageLinks.map((l, i) => ({
+            projectId: created!.id,
+            ...l,
+            createdAt: sql`now() + ${i} * interval '1 microsecond'`,
+          })),
+        )
+        .onConflictDoNothing();
     return created!;
   });
   if (figma) await notifyReferenceQueued(db);

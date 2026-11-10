@@ -296,6 +296,7 @@ export async function loadReportSource(db: Database, scanId: string) {
         expected: issue.expected,
         actual: issue.actual,
         recommendation: issue.recommendation,
+        explanation: issue.explanation,
         confidence: issue.confidence,
         verdict: issue.verdict,
         origin: issue.origin,

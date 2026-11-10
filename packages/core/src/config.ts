@@ -61,11 +61,27 @@ export const configSchema = z
 
     STORAGE_DIR: z.string().default("./storage"),
     MAX_UPLOAD_MB: int(1, 200).default(20),
+    /**
+     * Time one processing run of a content document may take. A PDF stopped by it keeps the
+     * pages read so far (partial) and can continue with Retry.
+     */
+    DOCUMENT_EXTRACTION_TIMEOUT_MS: int(10_000, 3_600_000).default(300_000),
+    /** Heap limit of the document parsing thread. */
+    DOCUMENT_PARSER_MEMORY_MB: int(128, 4_096).default(512),
+    /** Blocks stored per document; beyond it the document is partial (never silently cut). */
+    DOCUMENT_MAX_BLOCKS: int(100, 500_000).default(50_000),
+    /** Target size of indexed sections (also capped at a quarter of AI_MAX_INPUT_TOKENS). */
+    DOCUMENT_CHUNK_TOKENS: int(100, 4_000).default(600),
 
-    AI_PROVIDER: z.enum(["none", "anthropic", "openai-compatible"]).default("none"),
+    AI_PROVIDER: z
+      .enum(["none", "anthropic", "openai-compatible", "gemini", "groq"])
+      .default("none"),
     AI_MODEL: z.string().optional(),
-    /** Sampling temperature for the OpenAI-compatible provider (current Claude models reject it). */
-    AI_TEMPERATURE: z.coerce.number().min(0).max(1).default(0),
+    /**
+     * Sampling temperature for OpenAI-style providers (current Claude models reject it). Unset:
+     * openai-compatible uses 0, gemini/groq send none (Google recommends Gemini 3's default).
+     */
+    AI_TEMPERATURE: z.coerce.number().min(0).max(2).optional(),
     /** Per request. Thinking models can take minutes for a batch of issues. */
     AI_TIMEOUT_MS: int(1_000, 600_000).default(300_000),
     /** Includes thinking tokens on models that think. */
@@ -76,13 +92,42 @@ export const configSchema = z
     AI_REFUSAL_FALLBACK: bool.default(true),
     /** AI requests (batches of issues) sent in parallel per scan. */
     AI_CONCURRENCY: int(1, 8).default(3),
+    /** Retries per request after rate limits (429), server errors and network failures. */
+    AI_MAX_RETRIES: int(0, 8).default(3),
+    /** Longest Retry-After wait honoured; a longer requested wait ends the request. */
+    AI_MAX_RETRY_WAIT_MS: int(0, 600_000).default(60_000),
+    /** Client-side pacing per worker process (0 = none). Set to your plan's limits on free tiers. */
+    AI_REQUESTS_PER_MINUTE: int(0, 100_000).default(0),
+    AI_TOKENS_PER_MINUTE: int(0, 100_000_000).default(0),
+    /** Estimated input tokens per request (batches of issues are cut to fit). */
+    AI_MAX_INPUT_TOKENS: int(1_000, 1_000_000).default(20_000),
+    /** Issues per scan sent to AI; the rest keep the scanners' wording. */
+    AI_MAX_ISSUES_PER_SCAN: int(0, 5_000).default(200),
+    /** OpenAI-style providers: strict json_schema, or json_object for models without it. */
+    AI_STRUCTURED_OUTPUT: z.enum(["json_schema", "json_object"]).default("json_schema"),
     ANTHROPIC_API_KEY: z.string().optional(),
     OPENAI_API_KEY: z.string().optional(),
     OPENAI_BASE_URL: z.string().url().optional(),
+    GEMINI_API_KEY: z.string().optional(),
+    GROQ_API_KEY: z.string().optional(),
 
     FIGMA_ACCESS_TOKEN: z.string().optional(),
+    /** Largest Figma response read; bigger files are read page by page. */
+    FIGMA_MAX_RESPONSE_MB: int(1, 500).default(50),
+    /** Pages per /nodes request when a file is read page by page (fewer requests = less quota). */
+    FIGMA_PAGES_PER_REQUEST: int(1, 100).default(10),
+    FIGMA_TIMEOUT_MS: int(5_000, 600_000).default(120_000),
+    /** Retries after 429 (short Retry-After only) and 5xx/network errors. */
+    FIGMA_MAX_RETRIES: int(0, 6).default(3),
+    /** Longest Retry-After honoured; longer waits stop the read (it can be continued later). */
+    FIGMA_MAX_RETRY_WAIT_MS: int(0, 600_000).default(60_000),
 
     SCAN_MAX_PAGES: int(1, 500).default(25),
+    /**
+     * Pages the accessibility scanner analyzes per scan; 0 = all pages of the scan (its page
+     * limit). Pages not reached within the step's time budget are reported as not analyzed.
+     */
+    SCAN_ACCESSIBILITY_MAX_PAGES: int(0, 500).default(0),
     SCAN_MAX_DEPTH: int(0, 10).default(3),
     SCAN_PAGE_TIMEOUT_MS: int(1_000, 300_000).default(30_000),
     SCAN_SCANNER_TIMEOUT_MS: int(10_000, 3_600_000).default(600_000),
@@ -124,6 +169,10 @@ export const configSchema = z
       require("ANTHROPIC_API_KEY", "required when AI_PROVIDER=anthropic");
     if (cfg.AI_PROVIDER === "openai-compatible" && !cfg.OPENAI_API_KEY)
       require("OPENAI_API_KEY", "required when AI_PROVIDER=openai-compatible");
+    if (cfg.AI_PROVIDER === "gemini" && !cfg.GEMINI_API_KEY)
+      require("GEMINI_API_KEY", "required when AI_PROVIDER=gemini");
+    if (cfg.AI_PROVIDER === "groq" && !cfg.GROQ_API_KEY)
+      require("GROQ_API_KEY", "required when AI_PROVIDER=groq");
     if (cfg.AI_PROVIDER !== "none" && !cfg.AI_MODEL)
       require("AI_MODEL", "required when an AI provider is configured");
   });
@@ -211,6 +260,20 @@ export function configWarnings(cfg: AppConfig): string[] {
   return warnings;
 }
 
+/**
+ * What leaves the installation when AI is on. Provider terms as published on 2026-10-09
+ * (see LLM_PROVIDER_SETUP.md); they can change, so the wording points to the terms.
+ */
+const AI_DATA_NOTICES: Partial<Record<AppConfig["AI_PROVIDER"], string>> = {
+  gemini:
+    "Scan findings (website text, HTML excerpts, URLs) and brand-guideline lines are sent to the Google Gemini API. On Google's unpaid tier, submitted content may be used to improve Google's products and read by human reviewers; Google asks not to submit confidential or personal information there. Use a paid (billing-enabled) project for confidential sites.",
+  groq: "Scan findings (website text, HTML excerpts, URLs) and brand-guideline lines are sent to the Groq API. Groq states it does not retain inference data by default, except for up to 30 days for troubleshooting or abuse investigation; Zero Data Retention can be enabled in Groq's data controls.",
+  "openai-compatible":
+    "Scan findings (website text, HTML excerpts, URLs) and brand-guideline lines are sent to the configured OpenAI-compatible server. Check that provider's data-use terms.",
+  anthropic:
+    "Scan findings (website text, HTML excerpts, URLs) and brand-guideline lines are sent to the Anthropic API. Check Anthropic's commercial data-use terms.",
+};
+
 /** Non-secret summary suitable for logs and the settings UI. */
 export function describeConfig(cfg: AppConfig) {
   return {
@@ -222,6 +285,17 @@ export function describeConfig(cfg: AppConfig) {
     aiConfigured: cfg.AI_PROVIDER !== "none",
     aiEffort: cfg.AI_EFFORT ?? null,
     aiRefusalFallback: cfg.AI_PROVIDER === "anthropic" && cfg.AI_REFUSAL_FALLBACK,
+    aiLimits: {
+      requestsPerMinute: cfg.AI_REQUESTS_PER_MINUTE,
+      tokensPerMinute: cfg.AI_TOKENS_PER_MINUTE,
+      maxInputTokens: cfg.AI_MAX_INPUT_TOKENS,
+      maxOutputTokens: cfg.AI_MAX_OUTPUT_TOKENS,
+      maxIssuesPerScan: cfg.AI_MAX_ISSUES_PER_SCAN,
+      concurrency: cfg.AI_CONCURRENCY,
+      maxRetries: cfg.AI_MAX_RETRIES,
+    },
+    /** Whether scan evidence is sent to a provider whose free tier may use it (shown in Settings). */
+    aiDataNotice: AI_DATA_NOTICES[cfg.AI_PROVIDER] ?? null,
     figmaConfigured: Boolean(cfg.FIGMA_ACCESS_TOKEN),
     signupEnabled: cfg.AUTH_ALLOW_SIGNUP,
     encryptionKeyConfigured: Boolean(cfg.ENCRYPTION_KEY),

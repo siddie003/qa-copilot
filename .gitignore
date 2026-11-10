@@ -14,3 +14,11 @@ test-results/
 *.tsbuildinfo
 next-env.d.ts
 deploy.env
+# Environment secrets
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Temporary database scripts
+packages/db/_*.tmp.mjs

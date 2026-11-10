@@ -7,7 +7,10 @@ import { BlockCollector, ExtractionError, type ExtractionResult } from "./blocks
  * h1–h6, lists become li, hyperlinks keep their targets); the HTML is read in document order.
  * The archive itself has already passed the zip-bomb guard in upload validation.
  */
-export async function extractDocx(bytes: Buffer): Promise<ExtractionResult> {
+export async function extractDocx(
+  bytes: Buffer,
+  opts: { maxBlocks?: number } = {},
+): Promise<ExtractionResult> {
   let html: string;
   let messages: Array<{ type: string; message: string }>;
   try {
@@ -19,7 +22,7 @@ export async function extractDocx(bytes: Buffer): Promise<ExtractionResult> {
       `The Word document could not be read: ${(err as Error).message.split("\n")[0]}`,
     );
   }
-  const c = new BlockCollector();
+  const c = new BlockCollector({ maxBlocks: opts.maxBlocks });
   for (const m of messages.slice(0, 10))
     if (m.type === "error") c.warnings.push(`Word conversion: ${m.message}`);
 

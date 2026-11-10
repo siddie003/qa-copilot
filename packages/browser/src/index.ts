@@ -7,11 +7,19 @@ import {
 import { authHeadersFor, isOnSite, parseCookieString, type ScanAuth } from "@qa/core";
 import { chromium, type Browser, type BrowserContext, type Page, type Request } from "playwright";
 import { METRICS_SCRIPT, VITALS_INIT_SCRIPT } from "./page-scripts";
+import { DESIGN_QUALITY_SCRIPT, HEADING_QUERY, PARAGRAPH_QUERY } from "./quality-scripts";
 import { designStylesScript, TEXT_BLOCKS_SCRIPT } from "./reference-scripts";
+import { collectRenderedFonts, type RenderedFontTarget } from "./rendered-fonts";
 import { startGuardProxy, type GuardProxy } from "./proxy";
 
 export { startGuardProxy, type GuardProxy };
 export { designStylesScript, TEXT_BLOCKS_SCRIPT };
+export { DESIGN_QUALITY_SCRIPT, HEADING_QUERY, PARAGRAPH_QUERY };
+export {
+  collectRenderedFonts,
+  type RenderedFontSample,
+  type RenderedFontTarget,
+} from "./rendered-fonts";
 export { renderPdf, type PdfOptions } from "./pdf";
 
 export interface ViewportSpec {
@@ -202,6 +210,8 @@ export interface PageCaptureResult {
   designStyles: Record<string, unknown> | null;
   /** Visible text blocks and links (only when requested). */
   textContent: Record<string, unknown> | null;
+  /** Design Quality measurements (only when requested); see quality-scripts.ts. */
+  quality: Record<string, unknown> | null;
   error: string | null;
 }
 
@@ -300,6 +310,11 @@ export async function capturePage(
     design?: { selectors: string[] } | null;
     /** Collect visible text for content comparison. */
     text?: boolean;
+    /**
+     * Collect Design Quality measurements; with renderedFonts, also ask Chromium's font engine
+     * which fonts rendered a sample of headings and paragraphs.
+     */
+    quality?: { renderedFonts: boolean } | null;
   },
 ): Promise<PageCaptureResult> {
   const page = await context.newPage();
@@ -324,6 +339,7 @@ export async function capturePage(
     renderedLinks: [],
     designStyles: null,
     textContent: null,
+    quality: null,
     error: null,
   };
   try {
@@ -347,6 +363,11 @@ export async function capturePage(
       )) as Record<string, unknown>;
     if (opts.text)
       base.textContent = (await page.evaluate(TEXT_BLOCKS_SCRIPT)) as Record<string, unknown>;
+    if (opts.quality) {
+      const q = (await page.evaluate(DESIGN_QUALITY_SCRIPT)) as Record<string, unknown>;
+      if (opts.quality.renderedFonts) q.rendered = await collectRenderedFonts(page, fontTargets(q));
+      base.quality = q;
+    }
     if (opts.screenshot) {
       const height = (base.timings.documentHeight as number | null) ?? viewport.height;
       base.screenshotTruncated = height > MAX_SCREENSHOT_HEIGHT;
@@ -371,6 +392,24 @@ export async function capturePage(
     await page.close().catch(() => {});
   }
   return base;
+}
+
+/**
+ * Elements whose rendered fonts are sampled: the first heading of every level/style combination
+ * (at most 12) and the first two body paragraphs.
+ */
+function fontTargets(q: Record<string, unknown>): RenderedFontTarget[] {
+  const out: RenderedFontTarget[] = [];
+  const seen = new Set<string>();
+  for (const h of (q.headings ?? []) as Array<Record<string, unknown>>) {
+    const key = [h.level, h.fontFamily, h.fontWeight, h.fontStyle].join("|");
+    if (seen.has(key) || out.length >= 12) continue;
+    seen.add(key);
+    out.push({ kind: "heading", index: Number(h.index), query: HEADING_QUERY });
+  }
+  for (const p of ((q.paragraphs ?? []) as Array<Record<string, unknown>>).slice(0, 2))
+    out.push({ kind: "paragraph", index: Number(p.index), query: PARAGRAPH_QUERY });
+  return out;
 }
 
 /** Lightweight render used during crawling to discover links created by JavaScript. */

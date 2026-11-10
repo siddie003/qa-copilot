@@ -24,8 +24,11 @@ function soleLink(p: Paragraph): Link | null {
  * (`Page: About`, `<!-- page: /about -->`) set the page for the following blocks. Code blocks
  * and raw HTML are not website copy and are skipped.
  */
-export function extractMarkdown(input: string): ExtractionResult {
-  const c = new BlockCollector();
+export function extractMarkdown(
+  input: string,
+  opts: { maxBlocks?: number } = {},
+): ExtractionResult {
+  const c = new BlockCollector({ maxBlocks: opts.maxBlocks });
   const tree: Root = fromMarkdown(input.replace(/^\uFEFF/, ""));
 
   const visit = (node: RootContent) => {

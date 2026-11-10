@@ -19,6 +19,8 @@ import { analyzablePages, displayUrl, pool, sample, truncate } from "./util";
 
 const MAX_TARGETS = 300;
 const CONCURRENCY = 6;
+/** Failed page resources requested again to learn the server's answer (see failed-resource). */
+const MAX_RESOURCE_RECHECKS = 60;
 
 export type LinkClass =
   | { kind: "ok" }
@@ -30,7 +32,8 @@ export type LinkClass =
 /**
  * Classifies a link check. Only definitive answers count as "broken": 404/410, other
  * persistent errors, a host that does not exist. Timeouts and 502/503/504 after retries are
- * "temporarily unavailable"; 401/403/429 and blocked targets are "inconclusive".
+ * "temporarily unavailable"; 401/403/429, non-standard codes (LinkedIn 999) and blocked targets
+ * are "inconclusive".
  */
 export function classifyLink(r: FetchResult): LinkClass {
   if (r.error) {
@@ -60,6 +63,13 @@ export function classifyLink(r: FetchResult): LinkClass {
     return {
       kind: "inconclusive",
       reason: `HTTP ${s}: requires authentication or blocks automated checks`,
+    };
+  // Outside 100–599 is not an HTTP status but a site's own refusal code (LinkedIn answers 999 to
+  // automated requests, also for profiles that do not exist), so it says nothing about the link.
+  if (s < 100 || s > 599)
+    return {
+      kind: "inconclusive",
+      reason: `HTTP ${s}: non-standard status the site uses to refuse automated checks; open the link in a browser to verify it`,
     };
   if (s === 502 || s === 503 || s === 504)
     return { kind: "temporary", reason: `HTTP ${s} after ${r.attempts} attempt(s)` };
@@ -327,30 +337,100 @@ export const linksScanner: Scanner = {
         }
       }
     }
+    // The browser reports only its own error for a request it stopped (net::ERR_ABORTED,
+    // ERR_BLOCKED_BY_ORB …), not what the server answered. Each such resource is requested once
+    // more: an HTTP error is reported as that error; a resource the server delivers normally
+    // was stopped by the browser itself (a video download cancelled after its first part, a
+    // tracking pixel answering with another file type) and is not a missing file.
+    const recheck = [
+      ...new Set(
+        [...failed.entries()]
+          .filter(([, f]) => f.reason.startsWith("Request failed:"))
+          .map(([key]) => key.slice(0, key.lastIndexOf("|"))),
+      ),
+    ].slice(0, MAX_RESOURCE_RECHECKS);
+    const server = new Map<string, FetchResult>();
+    await pool(
+      recheck,
+      CONCURRENCY,
+      async (url) => {
+        server.set(
+          url,
+          await guardedFetch(url, {
+            ...ctx.fetch,
+            signal: ctx.signal,
+            method: "GET",
+            maxBodyBytes: 2_000,
+          }),
+        );
+      },
+      ctx.signal,
+    );
+    const delivered = new Set<string>();
+    const trackers = new Set<string>();
     for (const [key, f] of failed) {
       const url = key.slice(0, key.lastIndexOf("|"));
+      const again = server.get(url);
+      const browserError = f.reason.replace(/^Request failed: /, "");
+      // A third-party "image" the browser refused because the answer was not an image (ORB) is
+      // a tracking pixel or beacon: nothing visible is missing, and its server answers a second,
+      // cookie-less request differently anyway.
+      if (
+        f.type === "image" &&
+        /BLOCKED_BY_ORB/.test(browserError) &&
+        !isSameSite(url, ctx.siteUrl)
+      ) {
+        trackers.add(new URL(url).hostname);
+        continue;
+      }
+      let reason = f.reason;
+      let verdict: Verdict = "confirmed";
+      if (again?.status != null && again.status >= 400)
+        reason = `HTTP ${again.status}${again.contentType ? ` (${again.contentType.split(";")[0]})` : ""}; the browser stopped the request (${browserError})`;
+      else if (again?.status != null) {
+        delivered.add(`${url} (${browserError}; HTTP ${again.status} when requested again)`);
+        continue;
+      } else if (again) verdict = "potential";
       const critical = f.type === "script" || f.type === "stylesheet";
       findings.push({
         ruleId: "failed-resource",
         title: `${f.type[0]!.toUpperCase()}${f.type.slice(1)} failed to load`,
-        message: `${url} could not be loaded on ${f.pageUrl} (${f.reason}).${critical ? " Missing scripts or stylesheets can break functionality or layout." : ""}`,
+        message: `${url} could not be loaded on ${f.pageUrl} (${reason}).${critical ? " Missing scripts or stylesheets can break functionality or layout." : ""}`,
         subcategory: "resources",
         pageId: f.pageId,
         pageUrl: f.pageUrl,
         viewport: f.viewports.size === 1 ? [...f.viewports][0]! : null,
         severity: critical ? "high" : "medium",
-        verdict: "confirmed",
-        confidence: 0.9,
+        verdict,
+        confidence: verdict === "confirmed" ? 0.9 : 0.6,
         expected: "Resource loads with HTTP 2xx",
-        actual: f.reason,
+        actual: reason,
         fingerprintKey: url,
         evidence: [
           {
             kind: "network",
-            data: { url, resourceType: f.type, result: f.reason, viewports: [...f.viewports] },
+            data: {
+              url,
+              resourceType: f.type,
+              result: reason,
+              browserResult: f.reason,
+              serverStatus: again?.status ?? null,
+              serverError: again?.error?.message ?? null,
+              viewports: [...f.viewports],
+            },
           },
         ],
       });
+    }
+    if (trackers.size)
+      (checks.notes ??= []).push(
+        `Tracking pixels or beacons refused by the browser as non-images (ORB) were not reported: ${[...trackers].join(", ")}.`,
+      );
+    if (delivered.size) {
+      const s = sample([...delivered], 10);
+      (checks.notes ??= []).push(
+        `${delivered.size} resource request(s) were stopped by the browser but the server delivers them normally (not reported): ${s.items.join(", ")}${s.omitted ? ` (+${s.omitted})` : ""}`,
+      );
     }
     for (const [url, m] of mixed) {
       const verdict: Verdict = "confirmed";

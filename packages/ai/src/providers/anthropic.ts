@@ -87,6 +87,21 @@ function toProviderError(err: unknown, timedOut: boolean): AIProviderError {
     );
   if (err instanceof Anthropic.RateLimitError)
     return new AIProviderError("rate_limit", "The Anthropic API rate limit was exceeded", opts);
+  if (status === 413)
+    return new AIProviderError(
+      "too_large",
+      "The request is larger than the Anthropic API accepts (HTTP 413); lower AI_MAX_INPUT_TOKENS",
+      opts,
+    );
+  if (
+    err instanceof Anthropic.BadRequestError &&
+    /credit balance|billing/i.test((err as Error).message)
+  )
+    return new AIProviderError(
+      "quota_exhausted",
+      "The Anthropic account has no remaining credit (HTTP 400); add credit or change AI_PROVIDER",
+      opts,
+    );
   if (err instanceof Anthropic.BadRequestError || err instanceof Anthropic.UnprocessableEntityError)
     return new AIProviderError(
       "bad_request",

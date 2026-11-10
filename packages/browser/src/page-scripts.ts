@@ -2,6 +2,8 @@
 // (tsx/esbuild) rewrite named functions with a `__name()` helper that does not exist in the
 // browser, which breaks functions passed to page.evaluate. Strings are sent exactly as written.
 
+import { IN_CONSENT } from "./consent";
+
 /**
  * Installed before any page script runs: records lab Core Web Vitals with PerformanceObserver.
  * TBT is approximated as the sum of (long task duration − 50 ms) observed until measurement.
@@ -65,7 +67,9 @@ export const METRICS_SCRIPT = `(() => {
     const cs = getComputedStyle(el);
     return r.width > 0 && r.height > 0 && cs.visibility !== "hidden" && cs.display !== "none" && Number(cs.opacity) > 0;
   };
-  const all = Array.prototype.slice.call(document.body ? document.body.querySelectorAll("*") : []);
+  ${IN_CONSENT}
+  // Cookie-consent overlays are third-party and temporary: not part of the page layout.
+  const all = Array.prototype.slice.call(document.body ? document.body.querySelectorAll("*") : []).filter((el) => !inConsent(el));
 
   // Horizontal overflow and the outermost elements that cause it.
   const overflowPx = Math.max(0, de.scrollWidth - vw);
@@ -92,14 +96,20 @@ export const METRICS_SCRIPT = `(() => {
     if (r.width < 4 || r.height < 4 || !isVisible(el)) continue;
     const text = (el.textContent || "").replace(/\\s+/g, " ").trim();
     if (!text || el.children.length > 3) continue;
-    if (el.scrollWidth > el.clientWidth + 2 || el.scrollHeight > el.clientHeight + 2)
+    const clipsX = el.scrollWidth > el.clientWidth + 2;
+    const clipsY = el.scrollHeight > el.clientHeight + 2;
+    // Reveal animations hide each word in an overflow:hidden mask and move it in with a transform
+    // when the visitor scrolls to it; content moved out by a transform is not cut-off text.
+    const moved = () =>
+      Array.prototype.some.call(el.querySelectorAll("*"), (c) => getComputedStyle(c).transform !== "none");
+    if (clipsX || (clipsY && !moved()))
       clippedText.push({ selector: cssPath(el), text: text.slice(0, 120), scrollWidth: el.scrollWidth, clientWidth: el.clientWidth, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight, box: box(el) });
   }
 
   // Interactive elements: small targets (WCAG 2.5.8, 24×24 CSS px) and overlaps.
   const interactive = Array.prototype.slice
     .call(document.querySelectorAll('a[href], button, input:not([type=hidden]), select, textarea, [role=button], [role=link]'))
-    .filter(isVisible)
+    .filter((el) => isVisible(el) && !inConsent(el))
     .slice(0, 400);
   const smallTargets = [];
   for (const el of interactive) {

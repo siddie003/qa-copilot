@@ -80,6 +80,15 @@ export async function IssueList({
     issuesRepo.listIssueCategories(getDb(), userId, projectId),
   ]);
   const filtered = hasActiveFilters(f);
+  // Secondary filters fold away (they take a whole phone screen); open when one is in use.
+  const moreActive = [
+    f.url,
+    f.minConfidence !== undefined,
+    f.since,
+    f.severity.length,
+    f.status.length,
+    f.verdict.length,
+  ].filter(Boolean).length;
 
   if (total === 0 && !filtered) {
     return (
@@ -143,75 +152,86 @@ export async function IssueList({
               ))}
             </select>
           </div>
-          <div className="sm:col-span-2">
-            <label htmlFor="issue-url" className="mb-1 block text-xs font-medium text-muted">
-              Page URL contains
-            </label>
-            <input
-              id="issue-url"
-              name="url"
-              type="search"
-              defaultValue={f.url ?? ""}
-              placeholder="/pricing"
-              className={inputClasses}
+        </div>
+        <details open={moreActive > 0} className="mt-3">
+          <summary className="inline-flex min-h-6 cursor-pointer items-center text-sm font-medium text-primary">
+            More filters{moreActive > 0 ? ` (${moreActive} active)` : ""}: severity, status,
+            verdict, page, confidence, date
+          </summary>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="sm:col-span-2">
+              <label htmlFor="issue-url" className="mb-1 block text-xs font-medium text-muted">
+                Page URL contains
+              </label>
+              <input
+                id="issue-url"
+                name="url"
+                type="search"
+                defaultValue={f.url ?? ""}
+                placeholder="/pricing"
+                className={inputClasses}
+              />
+            </div>
+            <div>
+              <label
+                htmlFor="issue-confidence"
+                className="mb-1 block text-xs font-medium text-muted"
+              >
+                Confidence
+              </label>
+              <select
+                id="issue-confidence"
+                name="minConfidence"
+                defaultValue={f.minConfidence !== undefined ? String(f.minConfidence) : ""}
+                className={inputClasses}
+              >
+                {CONFIDENCE_OPTIONS.map(([v, l]) => (
+                  <option key={v} value={v}>
+                    {l}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label htmlFor="issue-since" className="mb-1 block text-xs font-medium text-muted">
+                Last detected
+              </label>
+              <select
+                id="issue-since"
+                name="since"
+                defaultValue={f.since ?? ""}
+                className={inputClasses}
+              >
+                <option value="">Any time</option>
+                {Object.entries(DETECTED_SINCE_LABELS).map(([v, l]) => (
+                  <option key={v} value={v}>
+                    {l}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <div className="mt-3 grid gap-3 lg:grid-cols-3">
+            <Checkboxes
+              legend="Severity"
+              name="severity"
+              options={SEVERITIES.map((s) => [s, SEVERITY_LABELS[s]!])}
+              selected={f.severity}
+            />
+            <Checkboxes
+              legend="Status"
+              name="status"
+              options={ISSUE_STATUSES.map((s) => [s, ISSUE_STATUS_LABELS[s]!])}
+              selected={f.status}
+            />
+            <Checkboxes
+              legend="Verdict"
+              name="verdict"
+              options={Object.entries(VERDICT_FILTER_LABELS)}
+              selected={f.verdict}
             />
           </div>
-          <div>
-            <label htmlFor="issue-confidence" className="mb-1 block text-xs font-medium text-muted">
-              Confidence
-            </label>
-            <select
-              id="issue-confidence"
-              name="minConfidence"
-              defaultValue={f.minConfidence !== undefined ? String(f.minConfidence) : ""}
-              className={inputClasses}
-            >
-              {CONFIDENCE_OPTIONS.map(([v, l]) => (
-                <option key={v} value={v}>
-                  {l}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label htmlFor="issue-since" className="mb-1 block text-xs font-medium text-muted">
-              Last detected
-            </label>
-            <select
-              id="issue-since"
-              name="since"
-              defaultValue={f.since ?? ""}
-              className={inputClasses}
-            >
-              <option value="">Any time</option>
-              {Object.entries(DETECTED_SINCE_LABELS).map(([v, l]) => (
-                <option key={v} value={v}>
-                  {l}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-        <div className="mt-3 grid gap-3 lg:grid-cols-3">
-          <Checkboxes
-            legend="Severity"
-            name="severity"
-            options={SEVERITIES.map((s) => [s, SEVERITY_LABELS[s]!])}
-            selected={f.severity}
-          />
-          <Checkboxes
-            legend="Status"
-            name="status"
-            options={ISSUE_STATUSES.map((s) => [s, ISSUE_STATUS_LABELS[s]!])}
-            selected={f.status}
-          />
-          <Checkboxes
-            legend="Verdict"
-            name="verdict"
-            options={Object.entries(VERDICT_FILTER_LABELS)}
-            selected={f.verdict}
-          />
-        </div>
+        </details>
         <div className="mt-3 flex gap-2">
           <button type="submit" className={buttonClasses("primary", "sm")}>
             Apply filters
@@ -224,6 +244,10 @@ export async function IssueList({
         </div>
       </form>
 
+      <p className="mb-2 text-sm text-muted" aria-live="polite">
+        {total === 1 ? "1 issue" : `${total} issues`}
+        {filtered ? " match these filters" : ""}
+      </p>
       {items.length === 0 ? (
         <p className="rounded-lg border border-border bg-surface px-4 py-8 text-center text-sm text-muted">
           No issues match these filters.

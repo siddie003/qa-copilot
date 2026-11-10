@@ -22,6 +22,25 @@ Status: **Draft for approval** · Date: 2026-10-03 · Phase: 0 (no functional co
 ---
 
 > **Amendments during implementation**
+> - Phase 14 (enhancement programme): **Figma reads are page-aware and resumable.** A metadata
+>   request decides whether the file changed; small files are read whole, large ones page by page
+>   through `/nodes` pinned to one version, with adaptive batch splitting and per-page failure
+>   isolation. A manifest and checkpoint on `reference_source` are saved after every batch, so
+>   reads stopped by Figma's rate limits, cancellation or a crash continue with only the missing
+>   pages. The normalizer collects into serializable state; design comparison is unchanged.
+> - Phase 13 (enhancement programme): **documents are processed in persisted batches.** The
+>   isolated parsing thread streams PDF page ranges (other formats: slices); each batch is stored
+>   with coverage and a checkpoint, so runs resume after interruption, can be cancelled, and report
+>   every page (text, blank, image-only, failed). After extraction, blocks are grouped into
+>   `content_chunk` sections with a PostgreSQL full-text index (no vector store). Retrieval is used
+>   for user search and to give AI explanations of content issues the exact approved section; the
+>   content comparison itself stays deterministic and compares only the blocks frozen at scan start.
+> - Phase 12 (enhancement programme): **free-tier providers without a new adapter.**
+>   `AI_PROVIDER=gemini|groq` are presets of the OpenAI-compatible adapter (Gemini's
+>   OpenAI-compatible endpoint, Groq). The adapter classifies quota exhaustion separately from
+>   per-minute rate limits, retries with jittered backoff and Retry-After, and an in-process pacer
+>   keeps requests within configured per-minute budgets. Batch size follows `AI_MAX_INPUT_TOKENS`;
+>   AI input is scrubbed of credential-shaped strings. Grounding and issue identity are unchanged.
 > - Phase 10: **Hardening without architectural change.** CSP is per request in `proxy.ts`
 >   (nonce + `strict-dynamic`; all pages rendered dynamically), HSTS on HTTPS. Rate limits are
 >   in-memory per user in the web process (§10's "rate limiting on auth, scan start, uploads"),
@@ -385,6 +404,14 @@ interface FindingDraft {
 | Responsive / visual | Viewports 1440×900, 768×1024, 390×844 (configurable); horizontal overflow (scrollWidth vs viewport + offending elements), clipped text (overflow:hidden with scrollWidth>clientWidth), overlapping interactive elements (bounding-box intersection), tap targets < 24px, font-size < 12px on mobile, broken images (`naturalWidth=0`), nav visible/hamburger toggles and exposes links | Full-page + element-crop screenshots stored as evidence |
 | Design compare | DesignSpec tokens vs computed styles of mapped roles (h1–h6, body, button primary/secondary, link, header, footer, container) | Color ΔE2000 ≤2 match, 2–5 potential, >5 mismatch; role not confidently mapped → **Unable to verify** |
 | Content compare | ContentBlocks vs DOM text per page | see §7 |
+| Design Quality & Typography (added 2026-10-13) | Read-only in-page measurements per capture (H1–H6 computed typography, `document.fonts`, image intrinsic vs rendered size, sibling geometry, spacing values) + Chromium DevTools `CSS.getPlatformFontsForNode` for rendered fonts at the widest viewport; runs **after** the design/content comparisons and reads their stored results | Reference values and approved text are reported by cross-reference (no duplicate findings); objective breakages (web font not rendered, image ≥ 1.5× enlarged or stretched) confirmed; consistency/spacing/alignment observations potential; missing inputs "not configured", failed dependencies make the step inconclusive. Details: `IMPLEMENTATION_NOTES.md` |
+
+**Amendment 2026-10-13 (inputs):** projects also hold **page links** (`project_page_link`, same-site
+URLs visited by every scan outside the page/depth limits, stored as `page.origin = 'user'`) and
+**brand fonts** (`project_font`, validated font files whose names are read from the font tables;
+only the names are frozen into scans). Page links are not mapped to Figma frames (the
+DesignSpec holds values, not page layouts). The wizard is Project → Figma / brand → Configure
+scan → Review → Start scan.
 
 ---
 
@@ -447,6 +474,13 @@ Configured by env (`AI_PROVIDER`, `AI_MODEL`, `AI_API_KEY`/`ANTHROPIC_API_KEY`, 
 Outcomes: `passed` → AI issue shown; `partial` → offending fields replaced by deterministic text, flagged; `rejected` → deterministic issue. All checks persisted (`grounding_check`) and visible in issue detail. Inconclusive sources → issue status `inconclusive`, wording "Unable to verify from available evidence".
 
 **Remediation**: rule-catalog templates (deterministic, include exact expected values from DesignSpec when present) + optional AI-written guidance subject to the same grounding rule (no invented values).
+
+> **Amendment (2026-10-11, issue explanations):** the AI output gained an optional `explanation`
+> (`problem, impact, nextStep, steps[], caveats[]`), grounded part by part and stored in
+> `issue.explanation` (migration 0009). The issue page, scan issue list and reports render a fix
+> guide built at display time by `@qa/core/fix-guide` from the stored occurrence and its evidence
+> (summary, steps, before/after code, caveats, verification, evidence gaps); grounded AI parts
+> replace only the parts they cover, and code examples are always deterministic.
 
 ---
 

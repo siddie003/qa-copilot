@@ -25,7 +25,7 @@ export const GET = authedHandler<Params>(
         "content-disposition": `attachment; filename="${reportFileName(report)}"`,
         "cache-control": "private, no-store",
         "x-content-type-options": "nosniff",
-        "content-security-policy": "default-src 'none'; sandbox",
+        "content-security-policy": "default-src 'none'; sandbox; frame-ancestors 'none'",
       },
     });
   },

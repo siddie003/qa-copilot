@@ -132,7 +132,8 @@ describe.skipIf(!hasTestDb)("projects API (route handlers, real database)", () =
       websiteUrl: "https://shop.example.com/",
       lastScan: null,
     });
-    expect(project.scanDefaults.scanners).toHaveLength(6);
+    // Six original scanners plus Design Quality & Typography (default on for new projects).
+    expect(project.scanDefaults.scanners).toHaveLength(7);
 
     const list = await (
       await projectsRoute.GET(request("/api/v1/projects?q=shop", { cookie: alice }), {})
@@ -216,6 +217,26 @@ describe.skipIf(!hasTestDb)("projects API (route handlers, real database)", () =
       expect(res.status).toBe(400);
       const body = await res.json();
       expect(body.errors[0].path).toBe("websiteUrl");
+    }
+  });
+
+  it("refuses a Figma link as the website URL (it is the design reference, not the site)", async () => {
+    for (const websiteUrl of [
+      "https://www.figma.com/design/AbC123xyz/Landing",
+      "figma.com/file/AbC123xyz/Landing",
+    ]) {
+      const res = await projectsRoute.POST(
+        request("/api/v1/projects", {
+          method: "POST",
+          cookie: alice,
+          body: { name: "x", websiteUrl },
+        }),
+        {},
+      );
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.errors[0]).toMatchObject({ path: "websiteUrl", code: "figma_url" });
+      expect(body.errors[0].message).toMatch(/This is a Figma link/);
     }
   });
 

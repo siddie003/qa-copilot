@@ -2,6 +2,314 @@
 
 ## [Unreleased]
 
+### Scan readiness guard and Figma role fixes (2026-10-22)
+#### Fixed
+- **Start QA Scan no longer skips the design comparison silently.** A scan uses the design
+  reference as it is when it starts. While the design reference is an unconfirmed draft or its
+  sources are still being read, or content documents are still processing, the Scan page and the
+  wizard's last step list the reasons, link to References and keep the button disabled until the
+  user confirms the draft or ticks “Start anyway”. The wizard keeps the button disabled until it
+  has checked the reference state (`apps/web/src/lib/scan-readiness.ts`, `start-scan.tsx`).
+- **Figma text-style roles:** “Body/CTA” and “Body/Link” are button and link styles, not body
+  text, and XXS sizes are skipped like XS. Previously a library grouping its CTA style under
+  “Body/” could supply the body font weight (Ascendion: Body/CTA 500 instead of Body/Body-S 300).
+- **Links:** a non-standard status code (outside 100–599, e.g. LinkedIn's 999 for automated
+  requests, which it also returns for profiles that do not exist) is “inconclusive”, not a
+  confirmed broken link.
+- **False positives found reviewing the Ascendion scan (2026-10-22):**
+  - *Failed resources:* a request the browser stopped (net::ERR_ABORTED, ERR_BLOCKED_BY_ORB) is
+    requested once more; an HTTP error is reported as that error (“HTTP 404 (text/html); the
+    browser stopped the request”), a resource the server delivers normally (e.g. a video whose
+    download Chromium cancels after the first part) is listed in the notes, not reported, and one
+    that cannot be checked again is “potential”.
+  - *Cookie-consent banners* (HubSpot, OneTrust, Cookiebot, CookieYes, Complianz, Osano,
+    Usercentrics, TrustArc, Quantcast, Termly; `packages/browser/src/consent.ts`) are left out of
+    design-role styles, page colors, Design Quality text, clipped text, overlaps and touch targets.
+    Accessibility checks still include them (visitors use them).
+  - *Body text role:* paragraphs inside headings, buttons, links or labels are not body text.
+  - *Clipped text:* content moved out of an overflow:hidden box by a transform (word-reveal
+    animation masks) is not reported as cut off.
+  - *Web font rendering:* a web font whose own family name extends the CSS name (“PP Neue Machina
+    Plain”, “IBM Plex Sans SemiCondensed”) counts as the declared font, not a fallback.
+  - *Spacing consistency:* inline items (links and spans wrapping inside a paragraph) are not
+    measured.
+  - *Subresource Integrity:* not expected for evergreen loaders (Google Tag Manager/Analytics,
+    HubSpot, Hotjar, Clarity, Facebook, LinkedIn, Stripe, reCAPTCHA); listed in the notes.
+  - *Tracking pixels:* a third-party image the browser refused as a non-image (ORB) is listed in
+    the notes, not reported as a failed resource (found in the 2026-10-24 Ascendion retest).
+  - *Open Graph:* the finding names the missing tags (e.g. “Open Graph tag missing: og:image”).
+- **Figma:** a value outside the supported range (e.g. a 9999px pill radius) is skipped and
+  reported instead of failing the whole Figma read (2026-10-19).
+
+#### Added
+- `fixtures/ascendion/`: Ascendion test package (brand guidelines transcribed from the Figma
+  design-system frames, IBM Plex Sans fonts with OFL, approved content from the supplied PDF,
+  Figma frame choice, recommended and complete page-link lists with sitemap problems).
+
+### Manager demo package (2026-10-14)
+#### Added
+- `fixtures/manager-demo/`: "Brightline Studio" demo website with documented, reproducible
+  defects and a `fixed` variant (`npm run demo:manager`, `npm run demo:manager:check`), brand
+  guidelines, design-values JSON, Geist font files with the OFL licence, approved content,
+  Figma-ready design spec, data manifest, end-to-end test guide and manager demo script.
+
+### Workflow redesign and Design Quality & Typography scanner (2026-10-13)
+#### Added
+- **New Project step:** optional **brand guidelines** (several files) and **font files** (WOFF2,
+  WOFF, TTF, OTF) next to the project name and website URL; listed with name and size, removable,
+  validated in the browser and uploaded after the project is created with real progress, per-file
+  status and Retry.
+- **Brand fonts** (`/api/v1/projects/:id/fonts`, References → Brand fonts): a font is stored only
+  if its tables can be read; family, style, weight, italic, variable-font flag and licence
+  embedding bits come from the file (`@qa/security` `validateFontUpload`, WOFF/WOFF2 decompression
+  with output limits).
+- **Page links** in Figma / brand (“+ Add page”, list with Remove, same-site/duplicate/file/Figma
+  validation) and on the References page (`/api/v1/projects/:id/page-links`). Every scan visits
+  them outside the page/depth limits; they are marked “Your page link” on the Pages list and a
+  page that cannot be loaded is reported in the crawl step with its status.
+- **Design Quality & Typography scanner** (`design_quality`, selectable, default on for new
+  projects): heading typography consistency and visual hierarchy per screen size, web fonts that
+  did not render (Chromium font engine), text not set in the uploaded brand fonts, images enlarged
+  beyond their source or stretched, spacing against the reference spacing scale, near-miss
+  alignment, uneven gaps. Heading reference values and approved-content checks are reported from
+  the design/content comparisons by cross-reference (no duplicate findings); missing inputs are
+  “not configured”, failed ones “not available”, and the step is then inconclusive, not completed.
+  Plain-language explanations, fix guides and catalog guidance for all nine `dq-*` rules.
+- Scanner results, the scan comparison page and reports show the scanner's parts; the Pages list
+  has a Design quality column; project settings show what each scanner checks.
+- Fixture site: `/design-quality` (not linked; reachable as a page link) with documented defects.
+- Migration `0010_design_quality` (additive): `project_page_link`, `project_font`, `page.origin`,
+  `page_capture.quality_key`.
+#### Changed
+- New Project wizard has five steps: Project → Figma / brand → Configure scan → Review → Start
+  scan. The separate **Content** step was removed; content documents (same upload, validation,
+  page mapping and processing) are now in Figma / brand. "Figma file link" is labelled "Figma
+  design URL".
+- Uploading the same file twice to a project as a content document or brand guideline is refused
+  (409) instead of creating a duplicate record.
+
+### Issue explanations (Phase 15 extension, 2026-10-11)
+#### Added
+- **Fix guide for every issue** (`@qa/core/fix-guide`): plain summary (What is the problem? / Why
+  does it matter? / What should I do next?), the facts the scan recorded, numbered fix steps,
+  before/after code examples where the evidence supports them, caveats, "what the scan could not
+  tell" and verification steps. Rule-specific guides for every security, SEO, links, performance
+  and responsive rule, design and content comparison, and 23 common axe rules; other rules get a
+  general guide from the stored guidance and the axe evidence. Works without AI and for issues of
+  earlier scans (built when the page is shown).
+- **Issue page in two levels:** In plain language → Where it was found (pages, screen sizes,
+  element, recorded HTML, measured facts) → How to fix it → Example fix (copy button) → How to
+  verify the fix; then a collapsible **Technical details and evidence** section with the unchanged
+  technical card, How reliable, every source finding with its raw evidence and screenshots, and
+  Evidence validation. `#evidence` links open the section.
+- Scan issue list: each expanded issue starts with the plain summary and links to the full guide.
+- **Scan findings page** (`/scans/:id/findings`, raw findings such as `A11Y-024`): every finding now
+  opens with the same guide built from its own evidence (problem, why, next step, where, fix steps,
+  example fix, verification, link to its issue); the scanner message, rule, element, expected/actual,
+  confidence and raw evidence moved into a collapsible "Technical details and evidence" section.
+  The guide is built in the browser when a finding is opened (the linked finding on the server),
+  keeping the page at 0.77 MB for 57 findings instead of 1.56 MB with every guide pre-rendered.
+- Reports (Markdown, PDF/HTML, JSON): plain summary, fix steps and verification per issue
+  (`plainLanguage` in JSON); the stored recommendation is kept and labelled as such.
+- **Optional AI explanation:** the AI may return `explanation` (problem, impact, next step, fix
+  steps, caveats). Each part passes the existing evidence check or is replaced by the built-in
+  guide (steps all-or-nothing, caveats one by one); checks are stored and shown. AI never writes
+  code examples. Prompt version `issues-2026-10-11-explain`.
+- Migration `0009_issue_explanation`: nullable `issue.explanation jsonb` (additive).
+#### Changed
+- The "Explanation" card was replaced by the cards above; technical details are collapsed by
+  default. Evidence validation names the new explanation checks.
+- Report label "How to fix" → "Recommendation stored with the issue" (the new "Fix steps" come
+  first).
+
+### Live Figma enablement (2026-10-10)
+#### Fixed
+- Figma text colors: taken only when every text layer using a style has the same fill (text
+  styles have no color in Figma); otherwise skipped with "used with N different colors". Found on
+  a real file, where it produced unsupported "confirmed" color mismatches.
+#### Changed
+- Configuration (`.env`, not committed): `FIGMA_ACCESS_TOKEN` set. `FIGMA_INTEGRATION.md` §0 records
+  the live verification.
+
+### Live AI enablement (2026-10-10)
+#### Fixed
+- Gemini 429 classification: Google sends the same "exceeded your current quota … plan and
+  billing" message for per-minute and per-day limits; a per-minute limit was treated as an
+  exhausted quota and stopped AI for the rest of the scan. Structured quota ids (`…PerDay…` vs
+  `…PerMinute…`) now decide; the message is only a fallback.
+#### Changed
+- Configuration (`.env`, not committed): Gemini `gemini-3.6-flash`, concurrency 2, 5 requests per
+  minute (the live free-tier limit). `LLM_PROVIDER_SETUP.md` §0 records the live measurements.
+
+### Phase 16: Final integration, regression, security and performance validation (2026-10-09)
+#### Fixed
+- **Stored files lost their sandboxing policy.** The site-wide `Content-Security-Policy` from
+  `next.config.ts` replaced the stricter header of screenshot/snapshot artifacts and report
+  downloads (`default-src 'none'; sandbox`). Those two routes are now excluded from the static
+  header and carry `frame-ancestors 'none'` themselves. Verified on a production build; asserted
+  in the acceptance e2e test. (HTML snapshots were and are served as `text/plain` + `nosniff`.)
+- **Brand guideline lines without blank lines between them were not read at all** (they form one
+  paragraph block). Blocks are now split where a typography role or a font declaration starts.
+- **Comparison wording:** a persistent issue that was also found on parts the earlier scan could
+  not check no longer says "same findings"; the reason names the newly checked findings.
+- **Cancel near the end of a scan** was ignored when the remaining steps finished before the next
+  5-second heartbeat. The worker now checks for a cancel before every step.
+- **Findings page performance:** 100 findings per page (`?page=`, `?finding=<id>` opens the page
+  of a linked finding, links from issues and comparisons updated). A 6,625-finding scan went from
+  a 64 MB page in 9.1 s to 1.3 MB in 0.3 s.
+- **Compare page performance:** at most 50 issues per category on the overview, 200 per page in a
+  single category. 3,750 compared issues went from a 26 MB page to 0.66 MB.
+- Evidence of a scan's findings is grouped in one pass (was quadratic) and loaded in id chunks of
+  10,000 (one id list could exceed PostgreSQL's 65,535 parameters on very large scans). The first
+  attempt (a join with `ORDER BY created_at`) changed the order of evidence items with equal
+  timestamps and was caught by the run-scan integration test.
+#### Added
+- `pipelineRepo.listFindingDisplayIds`; paging option on `listFindingsForScan`.
+- Tests: IDOR matrix extended to the Phase 13–14 routes (content search, document cancel,
+  reference cancel); guideline paragraph extraction; comparison wording; cancel between
+  heartbeats (with a mutation check); findings paging; CSP headers of stored files (e2e).
+#### Changed
+- `references.spec.ts` (e2e) expected the pre-Phase-13 label "Parsed"; it now expects "Completed".
+
+### Phase 15: UI/UX and plain-language issue explanations (2026-10-09)
+#### Added
+- Plain-language explanation on every issue page (`PlainExplanation`): What it means, Why it
+  matters, Where it occurred, What was observed, How serious, How to fix, How to check the fix,
+  How reliable. Rule wording comes from a fixed catalog (`@qa/core/explain`: every rule the
+  scanners emit, the common axe-core rules, category fallbacks); pages, elements, values, counts
+  and confidence come from the stored occurrence. Uncertain verdicts are explained first; a
+  suggested fix is labelled "not verified until a later scan confirms it"; Resolved / Reopened /
+  In progress / Ignored explain what the status does and does not prove.
+- Severity meanings, verdict meanings, confidence explanation and one-line scanner descriptions
+  (`SEVERITY_MEANINGS`, `VERDICT_MEANINGS`, `CONFIDENCE_EXPLANATION`, `SOURCE_DESCRIPTIONS`).
+- Specific fix guidance for common axe-core rules (image-alt, color-contrast, link-name,
+  button-name, label, html-has-lang, document-title, heading-order, target-size, region,
+  landmark-one-main), with the rule documentation link.
+- Setup wizard: a Figma link in the Website URL field is refused (client and server, error code
+  `figma_url` on create, update and validate-url); a non-Figma address in the Figma field is
+  explained; warning when no Figma token is configured; scanner descriptions; "what happens next"
+  notes (Figma reading, AI on/off); the final step shows each reference's real status and message.
+- Issue list: stacked cards on phones (the table needs ~960px), result count, secondary filters
+  folded into "More filters" (opened automatically when one is active).
+- Scan page: step summary on the Progress card ("N of M steps finished · x failed · y skipped").
+- `Alert` tone `warning`; `Card` `anchor` prop.
+#### Changed
+- Issue page: the scanner/AI description, rule id, full page list and claims moved to
+  "Technical details (for developers)" below the explanation; evidence and validation unchanged.
+- AI prompt (`PROMPT_VERSION` `issues-2026-10-09-plain`): descriptions in plain language without
+  jargon; recommendations stay developer-ready. Grounding is unchanged.
+- Wizard copy distinguishes the live website (step 1), how it should look (step 2: Figma, brand
+  guideline, manual values) and what it should say (step 3: approved content).
+
+### Phase 14: Figma API and multi-page processing (2026-10-09)
+#### Added
+- Figma reads through the official REST API with as few file-content (Tier 1) requests as
+  possible: `GET /v1/files/:key/meta` first (an unchanged version after a complete read makes no
+  file-content request), the whole file when it fits `FIGMA_MAX_RESPONSE_MB`, otherwise the page
+  list (`depth=1`) and the pages in batches through `GET /v1/files/:key/nodes`, pinned to the
+  listed version. Oversized or failing (5xx) batches are split; a single bad page is recorded as
+  failed and the others are read. Batch size adapts after a split.
+- Persisted manifest (`reference_source.manifest`): version, read mode, every page with status,
+  frames (id, name, type, size), node counts, requests per rate-limit tier, retries, rate-limit
+  details (Retry-After, plan tier, seat type, upgrade link), warnings, runs. Checkpoint with the
+  pinned version, pending pages and collected values: reads resume after rate limits, network
+  errors, cancellation and worker crashes, requesting only the missing pages.
+- Rate limits: short `Retry-After` waits are honoured (`FIGMA_MAX_RETRIES`,
+  `FIGMA_MAX_RETRY_WAIT_MS`); longer ones stop the read as **Partial** with a draft of the pages
+  read and the plan/seat details shown.
+- Cancel (`POST /api/v1/projects/:id/references/:refId/cancel`), "Continue reading", states
+  Partial / Ready with warnings / Cancelled; manifest summary on the References page.
+- Branch links (`/design/<key>/branch/<branchKey>/…`) use the branch key.
+- `SCAN_ACCESSIBILITY_MAX_PAGES` (default 0 = every page of the scan) replaces the fixed 25-page
+  accessibility limit; pages not reached within 80 % of the step timeout are reported as
+  "Not analyzed" instead of the step timing out.
+- Configuration: `FIGMA_MAX_RESPONSE_MB`, `FIGMA_PAGES_PER_REQUEST`, `FIGMA_TIMEOUT_MS`,
+  `FIGMA_MAX_RETRIES`, `FIGMA_MAX_RETRY_WAIT_MS`. `FIGMA_INTEGRATION.md`.
+- Migration `0008_figma_pages` (additive; ready references get outcome `completed`).
+#### Changed
+- The Figma normalizer is split into `collectFigma` (per tree, serializable state) and
+  `finalizeFigma`; `normalizeFigma` gives the same results as before.
+- Figma HTTP 5xx is reported as `SERVER_ERROR` (was `NETWORK`).
+- Extracted/skipped value lists keep up to 1,000 entries with their totals (was 100, cut
+  silently); the UI says how many are not shown.
+- Stale references are re-queued (3 attempts) instead of failed at once.
+
+### Phase 13: Large-document processing (2026-10-09)
+#### Added
+- PDFs are read page by page in an isolated thread and stored in batches (pages 1–30, then 25 per
+  batch), each with coverage and a checkpoint. Every page is reported: with text, blank,
+  image-only (scanned; OCR not available) or failed with its error — a failing page no longer
+  fails the document.
+- Persisted states: Upload received, Extracting text (real "N of M pages read"), Indexing sections,
+  Completed, Completed with warnings, Partial, Failed, Cancelled; coverage summary on the References
+  page and in the setup wizard.
+- Cancel (`POST /api/v1/content-documents/:id/cancel`) and Continue reading (retry of cancelled or
+  partial documents resumes at the checkpoint); stale runs are re-queued and resumed (3 attempts).
+- Retrieval sections (`content_chunk`, section-aware, page range, heading path, block range,
+  offsets, hash) with a PostgreSQL full-text index; search API
+  `GET /api/v1/projects/:id/content-search` and a search box on the References page; indexing job
+  for documents parsed before this phase.
+- AI explanations of content issues receive the approved section their finding comes from (exact
+  block → section lookup, ≤ 2 × 800 characters); it is part of the grounding corpus.
+- Identical uploads in the same project reuse the earlier results.
+- UTF-16 text files with a byte-order mark are accepted.
+- Configuration: `DOCUMENT_EXTRACTION_TIMEOUT_MS`, `DOCUMENT_PARSER_MEMORY_MB`, `DOCUMENT_MAX_BLOCKS`,
+  `DOCUMENT_CHUNK_TOKENS`.
+- `LARGE_DOCUMENT_PROCESSING.md`; tests (unit, rendered components, real-database integration).
+#### Changed
+- Block cap 5,000 → `DOCUMENT_MAX_BLOCKS` (50,000); reaching it makes the document Partial.
+  Shortened blocks are counted. Extraction time limit 60 s → 300 s per run.
+- Scans compare only the blocks that existed at scan start and report partially read documents as
+  inconclusive ("Only partly read: …"); content evidence names its source block.
+- Retry is also available for cancelled and partial documents.
+- Migration `0007_large_documents` (additive; existing parsed documents get an outcome from their
+  stored details; their sections are built by the worker).
+#### Fixed (found by the new tests before release)
+- A run cancelled while its last batches were being stored could have been reported as complete.
+- The block cap of non-PDF documents was not recorded in the coverage.
+
+### Phase 12: Free-tier LLM integration (2026-10-09)
+#### Added
+- `AI_PROVIDER=gemini` (Google Gemini API, OpenAI-compatible endpoint, `GEMINI_API_KEY`) and
+  `AI_PROVIDER=groq` (`GROQ_API_KEY`), both through the existing OpenAI-compatible adapter.
+- Retry and quota handling: full-jitter exponential backoff, `Retry-After` (seconds or HTTP date)
+  and Google `RetryInfo`, `AI_MAX_RETRIES`, `AI_MAX_RETRY_WAIT_MS`; new error codes
+  `quota_exhausted` (daily/billing quota, never retried, stops the scan's remaining requests) and
+  `too_large`; Gemini `API_KEY_INVALID` (HTTP 400) is an authentication error; Groq best-effort
+  schema mismatches (HTTP 400) are `invalid_output`, not a configuration error.
+- Client-side pacing per worker process: `AI_REQUESTS_PER_MINUTE`, `AI_TOKENS_PER_MINUTE`.
+- `AI_MAX_INPUT_TOKENS` (batch size), `AI_MAX_ISSUES_PER_SCAN`, `AI_STRUCTURED_OUTPUT`
+  (`json_schema` | `json_object`); `AI_EFFORT` is sent as `reasoning_effort` to OpenAI-style
+  providers.
+- Provider health check `npm run ai:check` (one tiny request, no scan data).
+- Settings page: AI request limits and a data-use notice per provider.
+- `LLM_PROVIDER_SETUP.md` with verified provider facts (2026-10-09), setup and troubleshooting.
+- Tests: `packages/ai/src/free-tier.test.ts` (30 mock tests) and a real-database integration test
+  of the Gemini preset against a mock endpoint (rate limit retried, quota exhausted, all issues
+  created, findings unchanged).
+#### Changed
+- `AI_TEMPERATURE` is optional: unset → 0 for `openai-compatible` (as before), provider default for
+  `gemini`/`groq`.
+- Provider error messages include at most 200 characters of the provider's message, without the
+  key or key-shaped strings (was 300 characters of the raw body).
+- Credential-shaped strings and credential-like URL parameters are removed from AI input;
+  guideline AI input is bounded by `AI_MAX_INPUT_TOKENS` and reports relevant lines not sent.
+- A single issue group larger than the request limit is not sent (kept in the scanners' wording,
+  recorded as `too_large_input`). `ai_run.detail` and the AI step record request attempts.
+- Anthropic: HTTP 413 → `too_large`; "credit balance" errors → `quota_exhausted`; SDK retries follow
+  `AI_MAX_RETRIES` (default 3, was 2).
+
+### Phase 11: Enhancement baseline (2026-10-09)
+#### Added
+- `ENHANCEMENT_BASELINE.md`: reconstructed history of Phases 0–10, verified git/database/test
+  state, audit of AI providers, document processing, Figma integration and UX, recommended plan
+  for Phases 12–16 and decisions needed.
+#### Changed
+- `PROJECT_STATUS.md`: enhancement programme section; corrected the stale note that Phase 10 was
+  uncommitted; recorded four open defects listed in `docs/QA-Copilot-Architecture.pdf`.
+- `IMPLEMENTATION_NOTES.md`: Phase 11 audit notes.
+- No application code, configuration, schema or data changed.
+
 ### Phase 10: Production hardening (2026-10-05)
 #### Security
 - Nonce-based Content-Security-Policy on every page (`proxy.ts`, `lib/csp.ts`): scripts only with

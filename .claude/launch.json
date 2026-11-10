@@ -14,10 +14,33 @@
       "port": 3000
     },
     {
+      "name": "web-dev-running",
+      "url": "http://localhost:3000",
+      "port": 3000
+    },
+    {
       "name": "worker",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "start:worker"],
       "port": 3001
+    },
+    {
+      "name": "fulltest-web",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["C:/Users/SIDDHA~1/AppData/Local/Temp/claude/C--Users-Siddharth-Downloads-qa-copilot/f640d113-7a12-42db-b349-149b9e4e9fb0/scratchpad/start-isolated.mjs", "web"],
+      "port": 3200
+    },
+    {
+      "name": "fulltest-worker",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["C:/Users/SIDDHA~1/AppData/Local/Temp/claude/C--Users-Siddharth-Downloads-qa-copilot/f640d113-7a12-42db-b349-149b9e4e9fb0/scratchpad/start-isolated.mjs", "worker"],
+      "port": 3291
+    },
+    {
+      "name": "fulltest-demo",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["C:/Users/SIDDHA~1/AppData/Local/Temp/claude/C--Users-Siddharth-Downloads-qa-copilot/f640d113-7a12-42db-b349-149b9e4e9fb0/scratchpad/start-isolated.mjs", "demo"],
+      "port": 4199
     },
     {
       "name": "demo-site",

@@ -95,5 +95,6 @@ export function deterministicIssue(g: IssueGroup, facts: GroupFacts): IssueField
     expected: ctx.expected,
     actual: ctx.actual,
     recommendation: remediationFor(g.category, ctx),
+    explanation: null,
   };
 }

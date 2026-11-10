@@ -1,3 +1,4 @@
+import { buildIssueGuide } from "@qa/core/fix-guide";
 import { FINDING_SOURCE_LABELS, stepLabel } from "@qa/core/domain";
 import type {
   CountMap,
@@ -103,6 +104,34 @@ function toFinding(f: ReportSource["findings"][number]): ReportFinding {
   };
 }
 
+/** The issue page's plain summary and fix guide, for readers of the report. */
+function plainLanguage(
+  i: ReportSource["issues"][number],
+  findings: ReportSource["findings"],
+): ReportIssue["plainLanguage"] {
+  const g = buildIssueGuide({
+    category: i.category,
+    ruleId: i.ruleId,
+    verdict: i.verdict,
+    affectedUrls: i.affectedUrls,
+    affectedElement: i.affectedElement,
+    recommendation: i.recommendation,
+    findings,
+    explanation:
+      i.groundingStatus === "passed" || i.groundingStatus === "partial"
+        ? (i.explanation ?? null)
+        : null,
+  });
+  return {
+    problem: g.problem,
+    whyItMatters: g.whyItMatters,
+    nextAction: g.nextAction,
+    steps: g.steps,
+    verify: g.verify,
+    aiWritten: g.aiParts,
+  };
+}
+
 function toStep(s: ReportSource["steps"][number]): ReportStep {
   const c = s.checks ?? {};
   const inconclusive = Array.isArray(c.inconclusive)
@@ -134,8 +163,24 @@ function toStep(s: ReportSource["steps"][number]): ReportStep {
           unableToVerify: num(cmp.unableToVerify) ?? 0,
         }
       : null,
+    parts: Array.isArray(c.parts)
+      ? (c.parts as Array<Record<string, unknown>>).map((p) => ({
+          label: String(p.label ?? p.key ?? ""),
+          status: String(p.status ?? ""),
+          detail: String(p.detail ?? ""),
+        }))
+      : [],
   };
 }
+
+/** Readable status of one part of a multi-part scanner. */
+export const PART_STATUS_LABELS: Record<string, string> = {
+  completed: "checked",
+  inconclusive: "inconclusive",
+  not_configured: "not configured",
+  unavailable: "not available",
+  failed: "failed",
+};
 
 /** Detected site technology, with the HTTP server named separately (as on the scan page). */
 function technologySummary(t: Record<string, unknown> | null): string | null {
@@ -195,6 +240,7 @@ export function buildReportData(
         actual: i.actual,
         recommendation: i.recommendation,
         severityRationale: i.severityRationale,
+        plainLanguage: plainLanguage(i, findings),
         textOrigin: i.origin,
         grounding: i.groundingStatus,
         groundingChecks: i.checks,

@@ -10,6 +10,7 @@ import {
   GroundingChecks,
   VerdictNote,
 } from "@/components/issues/grounding";
+import { PlainSummary } from "@/components/issues/plain-explanation";
 import { IssueStatusBadge, SeverityBadge, StepStatus } from "@/components/ui/badges";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Card } from "@/components/ui/stat";
@@ -228,6 +229,10 @@ export default async function ScanIssuesPage({
                     <GroundingBadge status={i.groundingStatus} />
                   </summary>
                   <div className="space-y-4 border-t border-border px-4 py-4 text-sm">
+                    <PlainSummary
+                      issue={i}
+                      href={`/projects/${project.id}/issues/${i.displayNo}?scan=${scanId}#fix`}
+                    />
                     <p className="whitespace-pre-line break-words">{i.description}</p>
                     <dl className="grid gap-2 sm:grid-cols-[9rem_1fr]">
                       <dt className="text-muted">Category / rule</dt>
@@ -333,7 +338,7 @@ export default async function ScanIssuesPage({
                         {i.findings.map((f) => (
                           <li key={f.id}>
                             <Link
-                              href={`${base}/findings?scanner=${i.category}#${f.displayId}`}
+                              href={`${base}/findings?scanner=${i.category}&finding=${f.displayId}#${f.displayId}`}
                               className="inline-flex items-center gap-1.5 rounded border border-border px-2 py-0.5 font-mono text-xs hover:bg-surface-muted"
                               title={f.title}
                             >

@@ -37,7 +37,8 @@ describe.skipIf(!hasTestDb)("projects repository (real PostgreSQL)", () => {
       isDemo: false,
       lastScan: null,
     });
-    expect(fetched!.scanDefaults.scanners).toHaveLength(6);
+    // Six original scanners plus Design Quality & Typography (default on for new projects).
+    expect(fetched!.scanDefaults.scanners).toHaveLength(7);
     expect(fetched!.issueCounts.total).toBe(0);
   });
 

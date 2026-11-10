@@ -53,15 +53,19 @@ export function Card({
   action,
   children,
   className,
+  anchor,
 }: {
   title: string;
   action?: React.ReactNode;
   children: React.ReactNode;
   className?: string;
+  /** Element id for in-page links (#anchor). */
+  anchor?: string;
 }) {
   const id = `card-${title.toLowerCase().replace(/\W+/g, "-")}`;
   return (
     <section
+      id={anchor}
       aria-labelledby={id}
       className={cn("rounded-lg border border-border bg-surface", className)}
     >

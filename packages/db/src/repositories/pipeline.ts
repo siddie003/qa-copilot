@@ -347,6 +347,8 @@ export interface NewPage {
   redirectChain: Array<{ url: string; status: number }> | null;
   depth: number;
   discoveredFrom: string | null;
+  /** "user" for page links the user added; "crawl" (default) for everything else. */
+  origin?: "crawl" | "user";
   title: string | null;
   contentType: string | null;
   responseHeaders: Record<string, string | string[]> | null;
@@ -399,6 +401,7 @@ export async function insertCapture(
     domSnapshotKey: string | null;
     computedStylesKey?: string | null;
     textContentKey?: string | null;
+    qualityKey?: string | null;
     consoleMessages: Array<Record<string, unknown>>;
     timings: Record<string, unknown>;
     metrics: Record<string, unknown> | null;
@@ -605,6 +608,21 @@ export async function insertFindings(
   });
 }
 
+/** Stored outcome of one step of a scan (read by later steps that cross-reference it). */
+export async function getStepResult(db: Database, scanId: string, stepKey: string) {
+  const [row] = await db
+    .select({
+      status: scannerRun.status,
+      statusReason: scannerRun.statusReason,
+      error: scannerRun.error,
+      findingCount: scannerRun.findingCount,
+      checks: scannerRun.checks,
+    })
+    .from(scannerRun)
+    .where(and(eq(scannerRun.scanId, scanId), eq(scannerRun.stepKey, stepKey)));
+  return row ?? null;
+}
+
 /** Everything scanners need about a scan's pages: headers, artifact keys, captures, requests. */
 export async function loadScanData(db: Database, scanId: string) {
   const pages = await db
@@ -640,21 +658,59 @@ export async function loadScanData(db: Database, scanId: string) {
 const SEVERITY_VALUES = ["critical", "high", "medium", "low", "info"] as const;
 type SeverityValue = (typeof SEVERITY_VALUES)[number];
 
-/** Raw findings of a scan (owner-checked) with their evidence, for the findings view and API. */
-export async function listFindingsForScan(
-  db: Database,
-  ownerId: string,
-  scanId: string,
-  filter: { scanner?: string; severity?: string[] } = {},
-) {
-  if (!(await canReadScanArtifacts(db, ownerId, scanId))) return null;
+type FindingFilter = { scanner?: string; severity?: string[] };
+
+function findingConditions(scanId: string, filter: FindingFilter) {
   const conditions = [eq(rawFinding.scanId, scanId)];
   if (filter.scanner) conditions.push(eq(rawFinding.scanner, filter.scanner));
   const severities = (filter.severity ?? []).filter((s): s is SeverityValue =>
     (SEVERITY_VALUES as readonly string[]).includes(s),
   );
   if (severities.length) conditions.push(inArray(rawFinding.proposedSeverity, severities));
+  return and(...conditions);
+}
+
+const EVIDENCE_ID_CHUNK = 10_000;
+
+const FINDING_ORDER = [
+  asc(rawFinding.proposedSeverity),
+  asc(rawFinding.scanner),
+  asc(rawFinding.displayId),
+];
+
+/**
+ * Display ids of a scan's findings in list order (owner-checked): cheap enough for thousands of
+ * findings, used to count and to find the page a linked finding is on.
+ */
+export async function listFindingDisplayIds(
+  db: Database,
+  ownerId: string,
+  scanId: string,
+  filter: FindingFilter = {},
+) {
+  if (!(await canReadScanArtifacts(db, ownerId, scanId))) return null;
   const rows = await db
+    .select({ displayId: rawFinding.displayId })
+    .from(rawFinding)
+    .where(findingConditions(scanId, filter))
+    .orderBy(...FINDING_ORDER);
+  return rows.map((r) => r.displayId);
+}
+
+/**
+ * Raw findings of a scan (owner-checked) with their evidence, for the findings view and API.
+ * `paging` returns one slice in list order (the view shows 100 per page).
+ */
+export async function listFindingsForScan(
+  db: Database,
+  ownerId: string,
+  scanId: string,
+  filter: FindingFilter = {},
+  paging?: { offset: number; limit: number },
+) {
+  if (!(await canReadScanArtifacts(db, ownerId, scanId))) return null;
+  const where = findingConditions(scanId, filter);
+  const query = db
     .select({
       id: rawFinding.id,
       displayId: rawFinding.displayId,
@@ -675,25 +731,40 @@ export async function listFindingsForScan(
     })
     .from(rawFinding)
     .leftJoin(page, eq(page.id, rawFinding.pageId))
-    .where(and(...conditions))
-    .orderBy(asc(rawFinding.proposedSeverity), asc(rawFinding.scanner), asc(rawFinding.displayId));
-  const ev = rows.length
-    ? await db
-        .select()
+    .where(where)
+    .orderBy(...FINDING_ORDER);
+  const rows = paging ? await query.limit(paging.limit).offset(paging.offset) : await query;
+  const columns = {
+    rawFindingId: evidence.rawFindingId,
+    kind: evidence.kind,
+    data: evidence.data,
+    storageKey: evidence.storageKey,
+  };
+  // Ids in chunks: one list for a whole very large scan could exceed PostgreSQL's 65,535
+  // parameters. (Evidence keeps the stored order, as before.)
+  const ev = [];
+  for (let i = 0; i < rows.length; i += EVIDENCE_ID_CHUNK)
+    ev.push(
+      ...(await db
+        .select(columns)
         .from(evidence)
         .where(
           inArray(
             evidence.rawFindingId,
-            rows.map((r) => r.id),
+            rows.slice(i, i + EVIDENCE_ID_CHUNK).map((r) => r.id),
           ),
-        )
-    : [];
-  return rows.map((r) => ({
-    ...r,
-    evidence: ev
-      .filter((e) => e.rawFindingId === r.id)
-      .map((e) => ({ kind: e.kind, data: e.data, storageKey: e.storageKey })),
-  }));
+        )),
+    );
+  const byFinding = new Map<
+    string,
+    Array<{ kind: string; data: unknown; storageKey: string | null }>
+  >();
+  for (const e of ev) {
+    const list = byFinding.get(e.rawFindingId) ?? [];
+    list.push({ kind: e.kind, data: e.data, storageKey: e.storageKey });
+    byFinding.set(e.rawFindingId, list);
+  }
+  return rows.map((r) => ({ ...r, evidence: byFinding.get(r.id) ?? [] }));
 }
 
 /** Finding counts per scanner and severity for a scan. */

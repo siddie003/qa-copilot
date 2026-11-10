@@ -3,7 +3,10 @@
  * configuration and pipeline steps (including failed, inconclusive and skipped ones), its issues
  * with their current tracking status, and the scanner findings each issue is built from.
  * Nothing in a report is computed by AI or invented: every value comes from database rows.
+ * The plain-language block per issue is fixed rule guidance filled in with those rows.
  */
+
+import type { AiExplanation } from "@qa/core/fix-guide";
 
 export type Severity = "critical" | "high" | "medium" | "low" | "info";
 export type Verdict = "confirmed" | "potential" | "inconclusive" | "unable_to_verify";
@@ -50,6 +53,8 @@ export interface ReportSource {
     expected: string | null;
     actual: string | null;
     recommendation: string | null;
+    /** Grounded AI explanation parts (null without AI text). */
+    explanation?: AiExplanation | null;
     confidence: number;
     verdict: Verdict;
     origin: "ai" | "deterministic";
@@ -120,6 +125,19 @@ export interface ReportIssue {
   actual: string | null;
   recommendation: string | null;
   severityRationale: string | null;
+  /**
+   * Plain-language explanation and fix guide (built-in rule guidance filled in with the issue's
+   * evidence, or grounded AI text where listed in aiWritten).
+   */
+  plainLanguage: {
+    problem: string;
+    whyItMatters: string;
+    nextAction: string;
+    steps: string[];
+    verify: string[];
+    /** Parts written by AI that passed evidence validation. */
+    aiWritten: string[];
+  };
   /** Who wrote the text: the scanners/rule catalog, or AI text that passed evidence validation. */
   textOrigin: "ai" | "deterministic";
   grounding: string;
@@ -148,6 +166,11 @@ export interface ReportStep {
     potentialMismatch: number;
     unableToVerify: number;
   } | null;
+  /**
+   * Parts of a multi-part scanner (Design Quality): checked, not configured or not available,
+   * each with its reason; empty for other steps.
+   */
+  parts: Array<{ label: string; status: string; detail: string }>;
 }
 
 export type CountMap = Record<string, number>;

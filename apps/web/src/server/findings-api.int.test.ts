@@ -131,6 +131,54 @@ describe.skipIf(!hasTestDb)("findings API (real database)", () => {
     expect(junk.total).toBe(2);
   });
 
+  it("pages through findings in list order with their evidence (Phase 16)", async () => {
+    await pipelineRepo.insertFindings(
+      getDb(),
+      scanId,
+      "security",
+      "SEC",
+      Array.from({ length: 23 }, (_, i) => finding(`rule-${i}`, "low", `Finding ${i}`)),
+    );
+    const userId = (
+      await getDb()
+        .select({ id: schema.user.id })
+        .from(schema.user)
+        .where(eq(schema.user.email, "alice-findings@example.test"))
+    )[0]!.id;
+    const all = (await pipelineRepo.listFindingsForScan(getDb(), userId, scanId))!;
+    const order = (await pipelineRepo.listFindingDisplayIds(getDb(), userId, scanId))!;
+    expect(order).toEqual(all.map((f) => f.displayId));
+    expect(all).toHaveLength(25);
+    const slices = [];
+    for (let offset = 0; offset < 25; offset += 10)
+      slices.push(
+        ...(await pipelineRepo.listFindingsForScan(
+          getDb(),
+          userId,
+          scanId,
+          {},
+          {
+            offset,
+            limit: 10,
+          },
+        ))!,
+      );
+    expect(slices.map((f) => f.displayId)).toEqual(order);
+    expect(slices.every((f) => f.evidence.length === 1)).toBe(true);
+    // Filters apply to both; other users see nothing.
+    const high = (await pipelineRepo.listFindingDisplayIds(getDb(), userId, scanId, {
+      severity: ["high"],
+    }))!;
+    expect(high).toHaveLength(1);
+    const bobId = (
+      await getDb()
+        .select({ id: schema.user.id })
+        .from(schema.user)
+        .where(eq(schema.user.email, "bob-findings@example.test"))
+    )[0]!.id;
+    expect(await pipelineRepo.listFindingDisplayIds(getDb(), bobId, scanId)).toBeNull();
+  });
+
   it("hides findings from other users and rejects malformed ids", async () => {
     expect(
       (await findingsRoute.GET(req(`/api/v1/scans/${scanId}/findings`, bob), p(scanId))).status,

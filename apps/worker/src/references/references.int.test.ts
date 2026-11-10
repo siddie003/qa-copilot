@@ -54,6 +54,12 @@ describe.skipIf(!hasTestDb)("reference processing (worker)", () => {
         res.writeHead(200, { "content-type": "application/json" });
         return res.end(figmaFile);
       }
+      if (req.url === "/v1/files/AbCdEfGh1234/meta") {
+        // GET file metadata (Tier 3): { file: { name, version, ... } }.
+        const f = JSON.parse(figmaFile) as { name: string; version: string };
+        res.writeHead(200, { "content-type": "application/json" });
+        return res.end(JSON.stringify({ file: { name: f.name, version: f.version } }));
+      }
       res.writeHead(404, { "content-type": "application/json" });
       res.end('{"status":404,"err":"Not found"}');
     });
@@ -241,13 +247,23 @@ describe.skipIf(!hasTestDb)("reference processing (worker)", () => {
     });
     expect(await designSpecsRepo.confirmDraft(getDb(), project.id, 1, ownerId)).toBeNull();
 
-    // Fetching the unchanged file again produces no new draft.
+    // Fetching the unchanged file again: the metadata shows the same version, so no file-content
+    // request is made and no new draft is created.
+    const requestsBefore = figmaRequests.length;
     await referencesRepo.requeueReference(getDb(), project.id, ref.id);
     await drain();
     row = await referencesRepo.getReference(getDb(), project.id, ref.id);
-    expect(row!.meta).toMatchObject({
-      draftVersion: null,
-      note: expect.stringMatching(/No new values/),
+    expect(row).toMatchObject({ status: "ready", outcome: "completed" });
+    expect(row!.meta).toMatchObject({ note: expect.stringMatching(/version 4242, unchanged/) });
+    expect(figmaRequests.slice(requestsBefore).map((r) => r.url)).toEqual([
+      "/v1/files/AbCdEfGh1234/meta",
+    ]);
+    expect((await designSpecsRepo.getDesignSpecState(getDb(), project.id)).draft).toBeNull();
+    expect(row!.manifest).toMatchObject({
+      mode: "whole_file",
+      complete: true,
+      pagesDiscovered: 3,
+      requests: { tier1: 1, tier3: 2 },
     });
   });
 
@@ -412,18 +428,35 @@ describe.skipIf(!hasTestDb)("reference processing (worker)", () => {
     expect((again!.meta as { valuesFound: number }).valuesFound).toBeGreaterThan(0);
   });
 
-  it("fails documents and references left processing by a stopped worker", async () => {
+  it("resumes documents left processing by a stopped worker, and fails them after 3 attempts", async () => {
     const project = await newProject();
     const doc = await addDocument(project.id, "a.txt", Buffer.from("Hello there."));
-    await getDb()
-      .update(schema.contentDocument)
-      .set({ parseStatus: "parsing", processingStartedAt: sql`now() - interval '10 minutes'` })
-      .where(eq(schema.contentDocument.id, doc.id));
-    expect(await contentRepo.recoverStaleDocuments(getDb(), 5 * 60_000)).toEqual([doc.id]);
+    const stale = (attempts: number) =>
+      getDb()
+        .update(schema.contentDocument)
+        .set({
+          parseStatus: "parsing",
+          attempts,
+          processingStartedAt: sql`now() - interval '10 minutes'`,
+        })
+        .where(eq(schema.contentDocument.id, doc.id));
+    await stale(1);
+    expect(await contentRepo.recoverStaleDocuments(getDb(), 5 * 60_000)).toMatchObject({
+      requeued: [doc.id],
+      failed: [],
+    });
+    expect((await contentRepo.listDocuments(getDb(), project.id))[0]).toMatchObject({
+      parseStatus: "pending",
+    });
+    await stale(3);
+    expect(await contentRepo.recoverStaleDocuments(getDb(), 5 * 60_000)).toMatchObject({
+      requeued: [],
+      failed: [doc.id],
+    });
     const [after] = await contentRepo.listDocuments(getDb(), project.id);
     expect(after).toMatchObject({
       parseStatus: "failed",
-      parseError: expect.stringMatching(/Retry/),
+      parseError: expect.stringMatching(/interrupted 3 times.*Retry/),
     });
   });
 });

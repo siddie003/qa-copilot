@@ -12,8 +12,12 @@ import {
 import { getDb, projectsRepo, referencesRepo, type ProjectSummary } from "@qa/db";
 import { validateWebsiteUrl } from "@qa/security";
 import { z } from "zod";
+import { validatePageLinks } from "./project-assets";
 
 const uuid = z.uuid();
+
+export const FIGMA_AS_WEBSITE_MESSAGE =
+  "This is a Figma link. Enter the address of the live website to test here, and add the Figma link as the design reference.";
 
 /** Validates a website URL against the static SSRF rules; returns the normalized URL. */
 export function normalizeWebsiteUrl(raw: string): string {
@@ -23,6 +27,12 @@ export function normalizeWebsiteUrl(raw: string): string {
   if (!result.ok)
     throw validationError(result.message, [
       { path: "websiteUrl", message: result.message, code: result.code },
+    ]);
+  // A design file is not the website: never crawl a Figma link as the site under test.
+  const host = new URL(result.url).hostname.toLowerCase();
+  if (host === "figma.com" || host.endsWith(".figma.com"))
+    throw validationError(FIGMA_AS_WEBSITE_MESSAGE, [
+      { path: "websiteUrl", message: FIGMA_AS_WEBSITE_MESSAGE, code: "figma_url" },
     ]);
   return result.url;
 }
@@ -70,13 +80,18 @@ export async function getProject(userId: string, id: string) {
 
 export async function createProject(userId: string, input: ProjectCreateInput) {
   const cfg = getConfig();
+  const websiteUrl = normalizeWebsiteUrl(input.websiteUrl);
+  // Page links are validated against the website before anything is stored, so a project is
+  // never created with a partial list.
+  const pageLinks = input.pageLinks?.length ? validatePageLinks(input.pageLinks, websiteUrl) : [];
   return projectsRepo.createProject(getDb(), userId, {
     name: input.name,
-    websiteUrl: normalizeWebsiteUrl(input.websiteUrl),
+    websiteUrl,
     scanDefaults:
       input.scanDefaults ??
       defaultScanDefaults({ maxPages: cfg.SCAN_MAX_PAGES, maxDepth: cfg.SCAN_MAX_DEPTH }),
     ...(input.figmaUrl ? { figma: parseFigmaReference(input.figmaUrl) } : {}),
+    ...(pageLinks.length ? { pageLinks } : {}),
   });
 }
 

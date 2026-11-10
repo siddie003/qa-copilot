@@ -1,15 +1,17 @@
 import {
   buildIssueDrafts,
+  CHARS_PER_TOKEN_ESTIMATE,
   GROUNDING_VERSION,
   interpretGroups,
   prepareGroups,
   PROMPT_VERSION,
+  SYSTEM_PROMPT,
   type AIProvider,
   type BatchResult,
   type PreparedGroup,
 } from "@qa/ai";
 import { NO_AI_PROVIDER_REASON, type AppConfig, type DesignSpec, type Logger } from "@qa/core";
-import { scanIssuesRepo, type Database } from "@qa/db";
+import { contentRepo, scanIssuesRepo, type Database } from "@qa/db";
 
 /** Data the AI step hands to the grounding step (kept in memory for the scan). */
 export interface IssueStepState {
@@ -45,11 +47,74 @@ export interface IssueStepOutcome {
 const AI_BUDGET_SHARE = 0.85;
 
 async function prepared(env: IssueStepEnv): Promise<PreparedGroup[]> {
-  env.state.prepared ??= prepareGroups(await scanIssuesRepo.loadScanFindings(env.db, env.scanId));
+  if (!env.state.prepared) {
+    const groups = prepareGroups(await scanIssuesRepo.loadScanFindings(env.db, env.scanId));
+    await attachApprovedSections(env, groups);
+    env.state.prepared = groups;
+  }
   return env.state.prepared;
 }
 
+/** Approved sections retrieved per content issue (the AI never receives whole documents). */
+const MAX_SECTIONS_PER_ISSUE = 2;
+
+/**
+ * Content issues: the indexed sections (chunks) that contain their findings' approved blocks,
+ * looked up by document and block position — exact retrieval, no similarity guess. Missing
+ * chunks (document deleted or not indexed) simply mean no extra context.
+ */
+async function attachApprovedSections(env: IssueStepEnv, groups: PreparedGroup[]) {
+  for (const g of groups) {
+    if (g.group.category !== "content") continue;
+    const wanted = new Map<string, { filename: string; orders: Set<number> }>();
+    for (const f of g.group.findings)
+      for (const e of f.evidence) {
+        const d = e.data as { documentId?: unknown; blockOrder?: unknown; document?: unknown };
+        if (e.kind !== "document" || typeof d.documentId !== "string") continue;
+        if (typeof d.blockOrder !== "number") continue;
+        const entry = wanted.get(d.documentId) ?? {
+          filename: String(d.document ?? "document"),
+          orders: new Set<number>(),
+        };
+        entry.orders.add(d.blockOrder);
+        wanted.set(d.documentId, entry);
+      }
+    const sections = [];
+    try {
+      for (const [documentId, { filename, orders }] of wanted) {
+        for (const c of await contentRepo.chunksForBlocks(env.db, documentId, [...orders])) {
+          if (sections.length >= MAX_SECTIONS_PER_ISSUE) break;
+          sections.push({
+            document: c.filename ?? filename,
+            section: c.headingText,
+            pages:
+              c.pageStart === null
+                ? c.pageHint
+                  ? `website page: ${c.pageHint}`
+                  : null
+                : c.pageStart === c.pageEnd
+                  ? `PDF page ${c.pageStart}`
+                  : `PDF pages ${c.pageStart}–${c.pageEnd}`,
+            text: c.text,
+          });
+        }
+      }
+    } catch (err) {
+      env.log.warn({ err: (err as Error).message }, "approved sections could not be loaded");
+    }
+    if (sections.length) g.context = { approvedSections: sections };
+  }
+}
+
 const k = (n: number) => (n >= 10_000 ? `${(n / 1000).toFixed(1)}k` : String(n));
+
+/** Batch input size from AI_MAX_INPUT_TOKENS, leaving room for the system prompt. */
+export function batchInputChars(config: AppConfig): number {
+  return Math.max(
+    2_000,
+    config.AI_MAX_INPUT_TOKENS * CHARS_PER_TOKEN_ESTIMATE - SYSTEM_PROMPT.length,
+  );
+}
 
 /**
  * AI interpretation: sends the scan's issue groups to the configured provider in batches and
@@ -70,6 +135,7 @@ export async function aiStep(env: IssueStepEnv): Promise<IssueStepOutcome> {
     provider,
     prepared: groups,
     concurrency: env.config.AI_CONCURRENCY,
+    limits: { maxChars: batchInputChars(env.config), maxTotal: env.config.AI_MAX_ISSUES_PER_SCAN },
     signal: AbortSignal.any([env.signal, budget]),
     onBatch: async (r) => {
       env.log.info(
@@ -79,6 +145,7 @@ export async function aiStep(env: IssueStepEnv): Promise<IssueStepOutcome> {
           groups: r.groupIds.length,
           status: r.status,
           errorCode: r.error?.code,
+          attempts: r.attempts,
           inputTokens: r.usage.inputTokens,
           outputTokens: r.usage.outputTokens,
           latencyMs: r.latencyMs,
@@ -106,6 +173,7 @@ export async function aiStep(env: IssueStepEnv): Promise<IssueStepOutcome> {
             requestedModel: provider.model,
             cacheReadTokens: r.usage.cacheReadTokens,
             inputChars: r.inputChars,
+            attempts: r.attempts,
             promptVersion: PROMPT_VERSION,
           },
         }),
@@ -139,6 +207,7 @@ export async function aiStep(env: IssueStepEnv): Promise<IssueStepOutcome> {
       error: b.error,
       model: b.model,
       latencyMs: b.latencyMs,
+      attempts: b.attempts,
       inputTokens: b.usage.inputTokens,
       outputTokens: b.usage.outputTokens,
       fallbackUsed: b.fallbackUsed,
@@ -161,7 +230,7 @@ export async function aiStep(env: IssueStepEnv): Promise<IssueStepOutcome> {
         ? `${failed.length + skipped.length} request(s) without an answer (${reasons.join("; ")}): their issues use the scanners' wording`
         : null,
       notSentToAi > 0
-        ? `${notSentToAi} issues beyond the AI limit use the scanners' wording`
+        ? `${notSentToAi} issues beyond the AI limit (AI_MAX_ISSUES_PER_SCAN=${env.config.AI_MAX_ISSUES_PER_SCAN}) use the scanners' wording`
         : null,
       `${k(checks.inputTokens)} input / ${k(checks.outputTokens)} output tokens`,
       done.some((b) => b.fallbackUsed) ? "a refusal fallback model answered some requests" : null,
@@ -202,6 +271,7 @@ export async function groundingStep(env: IssueStepEnv): Promise<IssueStepOutcome
       expected: d.expected,
       actual: d.actual,
       recommendation: d.recommendation,
+      explanation: d.explanation,
       confidence: d.confidence,
       verdict: d.verdict,
       status: d.status,

@@ -1,12 +1,23 @@
+import http from "node:http";
+import type { AddressInfo } from "node:net";
 import {
   AIProviderError,
+  createAIProvider,
   NoAIProvider,
   type AIProvider,
   type AiIssue,
   type StructuredRequest,
 } from "@qa/ai";
 import { createLogger, defaultScanDefaults, parseConfig, planScanSteps } from "@qa/core";
-import { closeDb, getDb, pipelineRepo, projectsRepo, scanIssuesRepo, schema } from "@qa/db";
+import {
+  closeDb,
+  contentRepo,
+  getDb,
+  pipelineRepo,
+  projectsRepo,
+  scanIssuesRepo,
+  schema,
+} from "@qa/db";
 import { and, asc, eq, inArray } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createTestUser, hasTestDb, resetDatabase } from "../../../../tests/setup/db";
@@ -142,6 +153,7 @@ describe.skipIf(!hasTestDb)(
         seo: "SEO",
         performance: "PERF",
         responsive: "RSP",
+        content: "CNT",
       };
       for (const [scanner, list] of Object.entries(findings))
         await pipelineRepo.insertFindings(
@@ -517,6 +529,190 @@ describe.skipIf(!hasTestDb)(
       expect((await groundingStep(e)).checks).toMatchObject({ issues: 5, deterministic: 5 });
       const { aiRuns } = (await scanIssuesRepo.listScanIssues(db(), ownerId, scanId))!;
       expect(aiRuns).toHaveLength(1); // requests that were never sent are not recorded as runs
+    });
+
+    it("free-tier provider (Gemini preset, mock endpoint): rate limit retried, quota exhausted, every issue still created", async () => {
+      const scanId = await newScan(fixtureFindings());
+      const before = await snapshotFindings(scanId);
+      // Mock of the documented OpenAI-compatible endpoint: request 1 hits the per-minute limit
+      // (retried), request 2 answers, request 3 finds the daily quota used up.
+      let calls = 0;
+      const server = http.createServer((req, res) => {
+        let raw = "";
+        req.on("data", (c) => (raw += c));
+        req.on("end", () => {
+          calls += 1;
+          const reply = (status: number, body: unknown, headers = {}) => {
+            res.writeHead(status, { "content-type": "application/json", ...headers });
+            res.end(JSON.stringify(body));
+          };
+          if (calls === 1)
+            return reply(429, { error: { message: "per minute" } }, { "retry-after": "0" });
+          if (calls === 3)
+            return reply(429, [
+              {
+                error: {
+                  status: "RESOURCE_EXHAUSTED",
+                  message: "You exceeded your current quota",
+                  details: [
+                    {
+                      violations: [
+                        { quotaId: "GenerateRequestsPerDayPerProjectPerModel-FreeTier" },
+                      ],
+                    },
+                  ],
+                },
+              },
+            ]);
+          const input = (JSON.parse(raw) as { messages: Array<{ content: string }> }).messages[1]!
+            .content;
+          const data = JSON.parse(
+            input.split("<scan_findings>\n")[1]!.split("\n</scan_findings>")[0]!,
+          ) as { groups: Array<{ groupId: string; findings: Array<{ id: string }> }> };
+          const g = data.groups[0]!;
+          reply(200, {
+            model: "gemini-3.8-flash",
+            choices: [
+              {
+                finish_reason: "stop",
+                message: {
+                  content: JSON.stringify({
+                    issues: [
+                      aiText(
+                        g.groupId,
+                        g.findings.map((x) => x.id),
+                        { claims: [], description: "Grounded text from the mock provider." },
+                      ),
+                    ],
+                  }),
+                },
+              },
+            ],
+            usage: { prompt_tokens: 900, completion_tokens: 150, total_tokens: 1050 },
+          });
+        });
+      });
+      await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+      try {
+        const geminiConfig = parseConfig({
+          DATABASE_URL: process.env.TEST_DATABASE_URL,
+          BETTER_AUTH_SECRET: "integration-test-secret-0123456789abcdef",
+          SCAN_SCANNER_TIMEOUT_MS: "60000",
+          AI_PROVIDER: "gemini",
+          AI_MODEL: "gemini-3.8-flash",
+          GEMINI_API_KEY: "AIzaINTEGRATION_TEST_KEY_0123456789abcdef",
+          AI_CONCURRENCY: "1",
+        });
+        const provider = createAIProvider(geminiConfig, {
+          geminiBaseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+          retryBaseMs: 1,
+        });
+        const e = { ...env(scanId, provider), config: geminiConfig };
+        const ai = await aiStep(e);
+        expect(ai).toMatchObject({
+          status: "completed",
+          statusReason: expect.stringMatching(
+            /^1 of 4 requests answered; 1 of 5 issues interpreted; 3 request\(s\) without an answer \(.*quota is used up.*\)/,
+          ),
+          toolName: "Google Gemini API",
+        });
+        expect(calls).toBe(3); // 429 retried once, then answered, then quota: nothing more sent
+        const grounding = await groundingStep(e);
+        expect(grounding.checks).toMatchObject({ issues: 5, deterministic: 4 });
+        const { aiRuns, issues } = (await scanIssuesRepo.listScanIssues(db(), ownerId, scanId))!;
+        expect(issues).toHaveLength(5);
+        expect(aiRuns.map((r) => [r.provider, r.status])).toEqual([
+          ["gemini", "completed"],
+          ["gemini", "failed"],
+        ]);
+        expect(aiRuns[0]).toMatchObject({ inputTokens: 900, outputTokens: 150 });
+        expect(aiRuns[0]!.detail).toMatchObject({ attempts: 2 });
+        expect(aiRuns[1]!.error).toMatch(/^quota_exhausted: /);
+        expect(JSON.stringify(aiRuns)).not.toContain("AIzaINTEGRATION_TEST_KEY");
+        expect(await snapshotFindings(scanId)).toBe(before); // findings and evidence untouched
+      } finally {
+        server.closeAllConnections();
+        await new Promise((r) => server.close(r));
+      }
+    });
+
+    it("gives content issues the approved section they come from (exact block lookup), never the whole document", async () => {
+      // An indexed approved document: 3 sections; the finding cites a block of the second.
+      const [doc] = await db()
+        .insert(schema.contentDocument)
+        .values({
+          projectId,
+          filename: "handbook.pdf",
+          mimeType: "application/pdf",
+          sizeBytes: 1,
+          sha256: "0".repeat(64),
+          storageKey: `projects/${projectId}/documents/x.pdf`,
+          parseStatus: "parsed",
+          blockCount: 30,
+          chunkCount: 3,
+        })
+        .returning();
+      await contentRepo.insertChunks(
+        db(),
+        doc!.id,
+        projectId,
+        [0, 1, 2].map((i) => ({
+          chunkIndex: i,
+          text:
+            i === 1
+              ? "Free shipping on all orders over $50. Returns within 30 days."
+              : `Other section ${i}.`,
+          headingText: i === 1 ? "Shipping" : `Part ${i}`,
+          pageHint: null,
+          pageStart: 10 + i,
+          pageEnd: 10 + i,
+          blockStart: i * 10,
+          blockEnd: i * 10 + 9,
+          charStart: 0,
+          charEnd: 10,
+          tokenEstimate: 10,
+          contentHash: "0".repeat(64),
+        })),
+      );
+      const scanId = await newScan({
+        content: [
+          f({
+            ruleId: "content-missing",
+            title: "Content missing: “Free shipping on all orders over $50.”",
+            locationKey: "/about",
+            expected: "Free shipping on all orders over $50.",
+            evidence: [
+              {
+                kind: "document",
+                data: { document: "handbook.pdf", documentId: doc!.id, blockOrder: 14 },
+              },
+            ],
+          }),
+        ],
+      });
+      const inputs: string[] = [];
+      const provider = scriptedProvider(() => null);
+      const capture: AIProvider = {
+        ...provider,
+        generateStructured: async (req) => {
+          inputs.push(req.input);
+          return provider.generateStructured(req);
+        },
+      };
+      await aiStep(env(scanId, capture));
+      expect(inputs).toHaveLength(1);
+      const sent = JSON.parse(
+        inputs[0]!.split("<scan_findings>\n")[1]!.split("\n</scan_findings>")[0]!,
+      ) as { groups: Array<{ approvedSections?: unknown[] }> };
+      expect(sent.groups[0]!.approvedSections).toEqual([
+        {
+          document: "handbook.pdf",
+          section: "Shipping",
+          pages: "PDF page 11",
+          text: "Free shipping on all orders over $50. Returns within 30 days.",
+        },
+      ]);
+      expect(inputs[0]).not.toContain("Other section");
     });
 
     it("creates no issues for a scan without findings", async () => {

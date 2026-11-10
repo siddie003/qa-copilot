@@ -159,6 +159,41 @@ const PAGES = {
   "/members": () =>
     layout("Members", `<h1>Members area</h1><a href="/members/profile">Your profile</a>`),
   "/members/profile": () => layout("Profile", `<h1>Your profile</h1>`),
+  // Not linked from any page: reachable only as a user-selected page link. Design Quality
+  // defects are intentional (see README).
+  "/design-quality": () =>
+    layout(
+      "Design quality",
+      `<div class="dq">
+<h1>Design quality fixture</h1>
+<p class="webfont">This paragraph asks for the web font Brand Missing, whose file does not exist.</p>
+<h2>First section</h2>
+<p>Regular section text that uses the default body font of the site.</p>
+<h2 class="promo">Second section with a different heading style</h2>
+<h3>A subsection drawn larger than its section heading</h3>
+<img class="upscaled" src="/images/team.png" alt="Team photo">
+<img class="stretched" src="/images/hero.png" alt="Hero banner squashed">
+<div class="stack"><div class="a">Block A starts at the container edge</div><div class="b">Block B starts 3px further right</div></div>
+<div class="cards"><div class="card">One</div><div class="card">Two</div><div class="card extra">Three</div><div class="card">Four</div></div>
+</div>`,
+      {
+        extraHead: `<style>
+@font-face{font-family:"Brand Missing";src:url("/fonts/brand-missing.woff2") format("woff2")}
+.dq h2{font-size:28px;font-weight:700}
+.dq h2.promo{font-size:22px;font-weight:400}
+.dq h3{font-size:34px}
+.dq .webfont{font-family:"Brand Missing",Georgia,serif}
+.dq img{display:block}
+.dq .upscaled{width:160px;height:160px}
+.dq .stretched{width:400px;height:200px}
+.stack>div{width:400px}
+.stack .b{margin-left:3px}
+.cards .card{height:40px;background:#eef}
+.cards .card+.card{margin-top:16px}
+.cards .card.extra{margin-top:28px}
+</style>`,
+      },
+    ),
 };
 
 const REDIRECTS = {

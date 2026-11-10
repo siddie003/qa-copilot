@@ -96,6 +96,8 @@ export const page = pgTable(
     redirectChain: jsonb().$type<Array<{ url: string; status: number }>>(),
     depth: integer().notNull(),
     discoveredFrom: text(),
+    /** How the page entered the scan: "crawl" (start page or discovered) or "user" (a page link). */
+    origin: varchar({ length: 16 }).notNull().default("crawl"),
     title: text(),
     contentType: varchar({ length: 255 }),
     /** Response headers of the final response (Set-Cookie values redacted, flags kept). */
@@ -124,6 +126,8 @@ export const pageCapture = pgTable(
     computedStylesKey: text(),
     /** Visible text blocks and links (collected only when the scan has content documents). */
     textContentKey: text(),
+    /** Design Quality measurements (headings, fonts, images, layout); only when that scanner runs. */
+    qualityKey: text(),
     consoleMessages: jsonb().$type<Array<Record<string, unknown>>>(),
     timings: jsonb().$type<Record<string, unknown>>(),
     /** In-page measurements: web vitals, layout (overflow, overlaps, tap targets), images. */

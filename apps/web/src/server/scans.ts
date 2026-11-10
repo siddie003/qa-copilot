@@ -1,8 +1,24 @@
 import "server-only";
-import { AppError, getConfig, notFound, planScanSteps, type ScanConfigSnapshot } from "@qa/core";
+import {
+  AppError,
+  coverageGapNote,
+  getConfig,
+  notFound,
+  planScanSteps,
+  type DocumentCoverage,
+  type ScanConfigSnapshot,
+} from "@qa/core";
 import { createHash } from "node:crypto";
-import { contentRepo, designSpecsRepo, getDb, pipelineRepo, secretsRepo } from "@qa/db";
+import {
+  contentRepo,
+  designSpecsRepo,
+  getDb,
+  pageLinksRepo,
+  pipelineRepo,
+  secretsRepo,
+} from "@qa/db";
 import { z } from "zod";
+import { fontReferencesForScan } from "./project-assets";
 import { getProject } from "./projects";
 
 const uuid = z.uuid();
@@ -35,6 +51,12 @@ export async function startScan(userId: string, projectId: string) {
     sha256: d.sha256,
     targetPath: d.targetPath,
     blockCount: d.blockCount,
+    outcome: d.outcome,
+    coverageNote:
+      d.outcome === "partial"
+        ? (coverageGapNote(d.coverage as DocumentCoverage | null) ??
+          "Part of this document could not be read.")
+        : null,
   }));
   const snapshot: ScanConfigSnapshot = {
     websiteUrl: project.websiteUrl,
@@ -50,6 +72,8 @@ export async function startScan(userId: string, projectId: string) {
     authType: (auth?.summary.type as ScanConfigSnapshot["authType"]) ?? null,
     designSpecVersion: spec?.version ?? null,
     contentDocuments: documents,
+    pageLinks: (await pageLinksRepo.listPageLinks(db, project.id)).map((l) => l.url),
+    approvedFonts: await fontReferencesForScan(project.id),
   };
   let scan;
   try {
@@ -63,7 +87,15 @@ export async function startScan(userId: string, projectId: string) {
       designSpecId: spec?.id ?? null,
       contentSnapshotHash: documents.length
         ? createHash("sha256")
-            .update(documents.map((x) => `${x.id}:${x.sha256}:${x.targetPath ?? ""}`).join("|"))
+            .update(
+              documents
+                // A partial document's content grows when it is continued: include its size.
+                .map(
+                  (x) =>
+                    `${x.id}:${x.sha256}:${x.targetPath ?? ""}${x.outcome === "partial" ? `:${x.blockCount}` : ""}`,
+                )
+                .join("|"),
+            )
             .digest("hex")
         : null,
     });

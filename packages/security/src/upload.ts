@@ -167,6 +167,21 @@ function checkDocx(bytes: Buffer, limits: UploadLimits): UploadCheck | null {
 }
 
 function checkText(bytes: Buffer): UploadCheck | null {
+  // UTF-16 is accepted only with a byte-order mark (without one it cannot be told from binary).
+  const utf16 =
+    bytes[0] === 0xff && bytes[1] === 0xfe
+      ? "utf-16le"
+      : bytes[0] === 0xfe && bytes[1] === 0xff
+        ? "utf-16be"
+        : null;
+  if (utf16) {
+    try {
+      new TextDecoder(utf16, { fatal: true }).decode(bytes);
+      return null;
+    } catch {
+      return fail("ENCODING", "The file is not valid UTF-16 text. Save it with UTF-8 encoding.");
+    }
+  }
   if (bytes.includes(0))
     return fail("ENCODING", "The file contains binary data. Upload plain UTF-8 text.");
   try {

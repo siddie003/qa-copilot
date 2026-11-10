@@ -11,7 +11,9 @@ import {
   GroundingChecks,
   VerdictNote,
 } from "@/components/issues/grounding";
+import { PlainExplanation, Reliability } from "@/components/issues/plain-explanation";
 import { StatusControl } from "@/components/issues/status-control";
+import { TechnicalDisclosure } from "@/components/issues/technical-disclosure";
 import { ISSUE_STATUS_LABELS, IssueStatusBadge, SeverityBadge } from "@/components/ui/badges";
 import { Card } from "@/components/ui/stat";
 import { cn } from "@/lib/cn";
@@ -106,181 +108,179 @@ export default async function IssueDetailPage({
                   </Link>
                 </p>
               )}
-              <Card title="Details">
-                <div className="space-y-4 text-sm">
-                  <p className="text-xs text-muted">
-                    From scan #{o.scanNumber} ({formatDateTime(o.scanCreatedAt)}) ·{" "}
-                    <Link
-                      href={`/projects/${project.id}/scans/${o.scanId}/issues#issue-${issue.displayNo}`}
-                      className="text-primary underline"
-                    >
-                      all issues of that scan
-                    </Link>
-                  </p>
-                  {(o.verdict === "inconclusive" || o.verdict === "unable_to_verify") && (
-                    <p className="rounded-md bg-surface-muted px-3 py-2">
-                      Unable to verify from available evidence. Review the findings below before
-                      acting on this issue.
+              <PlainExplanation
+                occurrence={o}
+                status={issue.status}
+                scanLabel={`Scan #${o.scanNumber} · ${formatDateTime(o.scanCreatedAt)}`}
+              />
+
+              <TechnicalDisclosure
+                title="Technical details and evidence"
+                hint={`Rule, elements, raw scanner evidence (${o.findings.length} finding${o.findings.length === 1 ? "" : "s"}), HTML, measurements, screenshots and the evidence check`}
+              >
+                <Card title="How reliable">
+                  <Reliability verdict={o.verdict} confidence={o.confidence} />
+                </Card>
+
+                <Card title="Technical details (for developers)">
+                  <div className="space-y-4 text-sm">
+                    <p className="text-xs text-muted">
+                      From scan #{o.scanNumber} ({formatDateTime(o.scanCreatedAt)}) ·{" "}
+                      <Link
+                        href={`/projects/${project.id}/scans/${o.scanId}/issues#issue-${issue.displayNo}`}
+                        className="text-primary underline"
+                      >
+                        all issues of that scan
+                      </Link>
                     </p>
-                  )}
-                  {o.verdict === "potential" && (
-                    <p className="rounded-md bg-warning-bg px-3 py-2">
-                      Needs review: the evidence suggests a problem but does not confirm it.
-                    </p>
-                  )}
-                  <p className="whitespace-pre-line break-words">{o.description}</p>
-                  <dl className="grid gap-2 sm:grid-cols-[9rem_minmax(0,1fr)]">
-                    <dt className="text-muted">Category / rule</dt>
-                    <dd>
-                      {FINDING_SOURCE_LABELS[o.category] ?? o.category}
-                      {o.ruleId && (
+                    <p className="whitespace-pre-line break-words">{o.description}</p>
+                    <dl className="grid gap-2 sm:grid-cols-[9rem_minmax(0,1fr)]">
+                      <dt className="text-muted">Category / rule</dt>
+                      <dd>
+                        {FINDING_SOURCE_LABELS[o.category] ?? o.category}
+                        {o.ruleId && (
+                          <>
+                            {" · "}
+                            <code className="font-mono text-xs">{o.ruleId}</code>
+                          </>
+                        )}
+                      </dd>
+                      <dt className="text-muted">Affected pages</dt>
+                      <dd className="min-w-0">
+                        {o.affectedUrls.length === 0 ? (
+                          "Site-wide"
+                        ) : (
+                          <ul className="space-y-0.5">
+                            {o.affectedUrls.slice(0, MAX_PAGES_SHOWN).map((u) => (
+                              <li key={u} className="break-all">
+                                {u}
+                              </li>
+                            ))}
+                            {o.affectedUrls.length > MAX_PAGES_SHOWN && (
+                              <li className="text-xs text-subtle">
+                                and {o.affectedUrls.length - MAX_PAGES_SHOWN} more
+                              </li>
+                            )}
+                          </ul>
+                        )}
+                      </dd>
+                      {o.affectedElement && (
                         <>
-                          {" · "}
-                          <code className="font-mono text-xs">{o.ruleId}</code>
+                          <dt className="text-muted">Element</dt>
+                          <dd className="break-all font-mono text-xs">{o.affectedElement}</dd>
                         </>
                       )}
-                    </dd>
-                    <dt className="text-muted">Affected pages</dt>
-                    <dd className="min-w-0">
-                      {o.affectedUrls.length === 0 ? (
-                        "Site-wide"
-                      ) : (
-                        <ul className="space-y-0.5">
-                          {o.affectedUrls.slice(0, MAX_PAGES_SHOWN).map((u) => (
-                            <li key={u} className="break-all">
-                              {u}
+                      {o.expected && (
+                        <>
+                          <dt className="text-muted">Expected</dt>
+                          <dd className="break-words">{o.expected}</dd>
+                        </>
+                      )}
+                      {o.actual && (
+                        <>
+                          <dt className="text-muted">Actual</dt>
+                          <dd className="break-words">{o.actual}</dd>
+                        </>
+                      )}
+                      {o.recommendation && (
+                        <>
+                          <dt className="text-muted">Recommendation</dt>
+                          <dd className="whitespace-pre-line break-words">{o.recommendation}</dd>
+                        </>
+                      )}
+                      <dt className="text-muted">Text</dt>
+                      <dd>
+                        {GROUNDING_LABELS[o.groundingStatus]?.help}
+                        {o.aiModel ? ` AI model: ${o.aiModel}.` : ""}
+                      </dd>
+                    </dl>
+                    {claims.length > 0 && (
+                      <div>
+                        <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted">
+                          Evidence-backed statements
+                        </h3>
+                        <ul className="list-disc space-y-1 pl-5">
+                          {claims.map((c, k) => (
+                            <li key={k}>
+                              {String(c.detail.text)}{" "}
+                              <span className="text-xs text-subtle">
+                                ({String(c.detail.findingId)})
+                              </span>
                             </li>
                           ))}
-                          {o.affectedUrls.length > MAX_PAGES_SHOWN && (
-                            <li className="text-xs text-subtle">
-                              and {o.affectedUrls.length - MAX_PAGES_SHOWN} more
-                            </li>
-                          )}
                         </ul>
-                      )}
-                    </dd>
-                    {o.affectedElement && (
-                      <>
-                        <dt className="text-muted">Element</dt>
-                        <dd className="break-all font-mono text-xs">{o.affectedElement}</dd>
-                      </>
+                      </div>
                     )}
-                    {o.expected && (
-                      <>
-                        <dt className="text-muted">Expected</dt>
-                        <dd className="break-words">{o.expected}</dd>
-                      </>
-                    )}
-                    {o.actual && (
-                      <>
-                        <dt className="text-muted">Actual</dt>
-                        <dd className="break-words">{o.actual}</dd>
-                      </>
-                    )}
-                    <dt className="text-muted">Severity</dt>
-                    <dd>
-                      <SeverityBadge severity={o.severity} />
-                      {o.severityRationale && (
-                        <span className="ml-2 text-muted">{o.severityRationale}</span>
-                      )}
-                    </dd>
-                    <dt className="text-muted">Confidence</dt>
-                    <dd>{Math.round(o.confidence * 100)}%</dd>
-                    <dt className="text-muted">Text</dt>
-                    <dd>
-                      {GROUNDING_LABELS[o.groundingStatus]?.help}
-                      {o.aiModel ? ` AI model: ${o.aiModel}.` : ""}
-                    </dd>
-                  </dl>
-                  {o.recommendation && (
-                    <div>
-                      <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted">
-                        How to fix
-                      </h3>
-                      <p className="whitespace-pre-line break-words">{o.recommendation}</p>
-                    </div>
-                  )}
-                  {claims.length > 0 && (
-                    <div>
-                      <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted">
-                        Evidence-backed statements
-                      </h3>
-                      <ul className="list-disc space-y-1 pl-5">
-                        {claims.map((c, k) => (
-                          <li key={k}>
-                            {String(c.detail.text)}{" "}
-                            <span className="text-xs text-subtle">
-                              ({String(c.detail.findingId)})
+                  </div>
+                </Card>
+
+                <Card
+                  anchor="evidence"
+                  title={`Source findings and evidence (${o.findings.length})`}
+                >
+                  <ul className="space-y-2">
+                    {o.findings.map((f, k) => (
+                      <li key={f.id} className="rounded-md border border-border">
+                        <details open={k === 0 && o.findings.length <= 3}>
+                          <summary className="flex cursor-pointer list-none flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2">
+                            <span className="font-mono text-xs text-subtle">{f.displayId}</span>
+                            <SeverityBadge severity={f.severity} />
+                            <span className="min-w-0 flex-1 font-medium break-words">
+                              {f.title}
                             </span>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                </div>
-              </Card>
+                            <span className="text-xs text-muted">
+                              {FINDING_VERDICTS[f.verdict] ?? f.verdict}
+                            </span>
+                          </summary>
+                          <div className="space-y-3 border-t border-border px-3 py-3 text-sm">
+                            <p className="break-words">{f.message}</p>
+                            <dl className="grid gap-2 sm:grid-cols-[8rem_minmax(0,1fr)]">
+                              <dt className="text-muted">Page</dt>
+                              <dd className="break-all">{f.pageUrl ?? "Site-wide"}</dd>
+                              {f.selector && (
+                                <>
+                                  <dt className="text-muted">Element</dt>
+                                  <dd className="break-all font-mono text-xs">{f.selector}</dd>
+                                </>
+                              )}
+                              <dt className="text-muted">Viewport</dt>
+                              <dd>{f.viewport ?? "All / not viewport-specific"}</dd>
+                              {f.expected && (
+                                <>
+                                  <dt className="text-muted">Expected</dt>
+                                  <dd className="break-words">{f.expected}</dd>
+                                </>
+                              )}
+                              {f.actual && (
+                                <>
+                                  <dt className="text-muted">Actual</dt>
+                                  <dd className="break-words">{f.actual}</dd>
+                                </>
+                              )}
+                              <dt className="text-muted">Confidence</dt>
+                              <dd>{Math.round(f.confidence * 100)}%</dd>
+                            </dl>
+                            <EvidenceView items={f.evidence as EvidenceItem[]} />
+                            <Link
+                              href={`/projects/${project.id}/scans/${o.scanId}/findings?scanner=${f.scanner}&finding=${f.displayId}#${f.displayId}`}
+                              className="inline-block text-xs text-primary underline"
+                            >
+                              {f.displayId} in the scan&apos;s findings
+                            </Link>
+                          </div>
+                        </details>
+                      </li>
+                    ))}
+                  </ul>
+                </Card>
 
-              <Card title={`Source findings and evidence (${o.findings.length})`}>
-                <ul className="space-y-2">
-                  {o.findings.map((f, k) => (
-                    <li key={f.id} className="rounded-md border border-border">
-                      <details open={k === 0 && o.findings.length <= 3}>
-                        <summary className="flex cursor-pointer list-none flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2">
-                          <span className="font-mono text-xs text-subtle">{f.displayId}</span>
-                          <SeverityBadge severity={f.severity} />
-                          <span className="min-w-0 flex-1 font-medium break-words">{f.title}</span>
-                          <span className="text-xs text-muted">
-                            {FINDING_VERDICTS[f.verdict] ?? f.verdict}
-                          </span>
-                        </summary>
-                        <div className="space-y-3 border-t border-border px-3 py-3 text-sm">
-                          <p className="break-words">{f.message}</p>
-                          <dl className="grid gap-2 sm:grid-cols-[8rem_minmax(0,1fr)]">
-                            <dt className="text-muted">Page</dt>
-                            <dd className="break-all">{f.pageUrl ?? "Site-wide"}</dd>
-                            {f.selector && (
-                              <>
-                                <dt className="text-muted">Element</dt>
-                                <dd className="break-all font-mono text-xs">{f.selector}</dd>
-                              </>
-                            )}
-                            <dt className="text-muted">Viewport</dt>
-                            <dd>{f.viewport ?? "All / not viewport-specific"}</dd>
-                            {f.expected && (
-                              <>
-                                <dt className="text-muted">Expected</dt>
-                                <dd className="break-words">{f.expected}</dd>
-                              </>
-                            )}
-                            {f.actual && (
-                              <>
-                                <dt className="text-muted">Actual</dt>
-                                <dd className="break-words">{f.actual}</dd>
-                              </>
-                            )}
-                            <dt className="text-muted">Confidence</dt>
-                            <dd>{Math.round(f.confidence * 100)}%</dd>
-                          </dl>
-                          <EvidenceView items={f.evidence as EvidenceItem[]} />
-                          <Link
-                            href={`/projects/${project.id}/scans/${o.scanId}/findings?scanner=${f.scanner}#${f.displayId}`}
-                            className="inline-block text-xs text-primary underline"
-                          >
-                            {f.displayId} in the scan&apos;s findings
-                          </Link>
-                        </div>
-                      </details>
-                    </li>
-                  ))}
-                </ul>
-              </Card>
-
-              <Card title="Evidence validation">
-                <p className="mb-2 text-xs text-muted">
-                  {GROUNDING_LABELS[o.groundingStatus]?.help}
-                </p>
-                <GroundingChecks checks={o.checks} />
-              </Card>
+                <Card title="Evidence validation">
+                  <p className="mb-2 text-xs text-muted">
+                    {GROUNDING_LABELS[o.groundingStatus]?.help}
+                  </p>
+                  <GroundingChecks checks={o.checks} />
+                </Card>
+              </TechnicalDisclosure>
             </>
           )}
         </div>

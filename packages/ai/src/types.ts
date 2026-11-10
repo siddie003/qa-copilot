@@ -1,4 +1,5 @@
 import type { Severity } from "@qa/core";
+import type { AiExplanation } from "@qa/core/fix-guide";
 
 export type FindingVerdict = "confirmed" | "potential" | "inconclusive" | "unable_to_verify";
 
@@ -72,6 +73,8 @@ export interface IssueFields {
   expected: string | null;
   actual: string | null;
   recommendation: string;
+  /** AI-written plain-language explanation (grounded parts only); null for the scanners' wording. */
+  explanation: AiExplanation | null;
 }
 
 export interface GroundingCheck {

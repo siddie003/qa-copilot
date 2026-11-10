@@ -6,6 +6,7 @@ import { FileText, PenTool } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
 import { DesignSpecEditor } from "@/components/references/design-spec-editor";
+import { FigmaManifestSummary } from "@/components/references/figma-manifest";
 import {
   isProcessing,
   ProcessingStatus,
@@ -40,17 +41,24 @@ function aiSummary(ai: unknown): string | null {
   return null;
 }
 
-function List({ title, items }: { title: string; items: unknown }) {
+const LIST_SHOWN = 200;
+
+/** A collapsible list; entries beyond what is shown (or stored) are counted, never dropped silently. */
+function List({ title, items, total }: { title: string; items: unknown; total?: unknown }) {
   if (!Array.isArray(items) || !items.length) return null;
+  const count = typeof total === "number" ? Math.max(total, items.length) : items.length;
   return (
     <details className="mt-1 text-xs text-muted">
       <summary className="cursor-pointer">
-        {title} ({items.length})
+        {title} ({count})
       </summary>
-      <ul className="mt-1 list-disc space-y-0.5 pl-5">
-        {items.slice(0, 50).map((x, i) => (
+      <ul className="mt-1 max-h-60 list-disc space-y-0.5 overflow-auto pl-5" tabIndex={0}>
+        {items.slice(0, LIST_SHOWN).map((x, i) => (
           <li key={i}>{String(x)}</li>
         ))}
+        {count > Math.min(items.length, LIST_SHOWN) && (
+          <li>and {count - Math.min(items.length, LIST_SHOWN)} more</li>
+        )}
       </ul>
     </details>
   );
@@ -261,8 +269,30 @@ export function DesignReferencePanel({
                       <Icon aria-hidden className="size-4 shrink-0 text-muted" />
                       <span className="break-all font-medium">{label}</span>
                     </span>
-                    <span className="flex items-center gap-2">
-                      <ProcessingStatus status={s.status} />
+                    <span className="flex flex-wrap items-center gap-2">
+                      <ProcessingStatus status={s.status} outcome={s.outcome} />
+                      {isProcessing(s.status) && !s.cancelRequestedAt && (
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          disabled={pending !== null}
+                          onClick={() =>
+                            run(
+                              `cancel-${s.id}`,
+                              () =>
+                                apiFetch(
+                                  `/api/v1/projects/${projectId}/references/${s.id}/cancel`,
+                                  {
+                                    method: "POST",
+                                  },
+                                ),
+                              "Cancellation requested; pages already read are kept.",
+                            )
+                          }
+                        >
+                          Cancel<span className="sr-only"> reading {label}</span>
+                        </Button>
+                      )}
                       <Button
                         variant="secondary"
                         size="sm"
@@ -274,11 +304,15 @@ export function DesignReferencePanel({
                               apiFetch(`/api/v1/projects/${projectId}/references/${s.id}/refresh`, {
                                 method: "POST",
                               }),
-                            "Queued again.",
+                            s.resumable ? "Queued to continue where it stopped." : "Queued again.",
                           )
                         }
                       >
-                        {s.kind === "figma" ? "Fetch again" : "Extract again"}
+                        {s.kind === "figma"
+                          ? s.resumable
+                            ? "Continue reading"
+                            : "Fetch again"
+                          : "Extract again"}
                         <span className="sr-only"> {label}</span>
                       </Button>
                       <Button
@@ -304,8 +338,9 @@ export function DesignReferencePanel({
                   {s.status === "ready" && aiSummary(meta.ai) && (
                     <p className="text-xs text-muted">{aiSummary(meta.ai)}</p>
                   )}
-                  <List title="Values read" items={meta.extracted} />
-                  <List title="Not used" items={meta.skipped} />
+                  {s.kind === "figma" && <FigmaManifestSummary manifest={s.manifest} />}
+                  <List title="Values read" items={meta.extracted} total={meta.extractedTotal} />
+                  <List title="Not used" items={meta.skipped} total={meta.skippedTotal} />
                 </li>
               );
             })}

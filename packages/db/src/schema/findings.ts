@@ -12,6 +12,7 @@ import {
   uuid,
   varchar,
 } from "drizzle-orm/pg-core";
+import type { AiExplanation } from "@qa/core/fix-guide";
 import { user } from "./auth";
 import {
   findingVerdictEnum,
@@ -134,6 +135,12 @@ export const issue = pgTable(
     expected: text(),
     actual: text(),
     recommendation: text(),
+    /**
+     * AI-written plain-language explanation (problem, impact, next step, fix steps, caveats):
+     * only the parts that passed grounding. Null when AI was not used or nothing passed; the
+     * issue page then uses the built-in fix guide.
+     */
+    explanation: jsonb().$type<AiExplanation>(),
     confidence: real().notNull(),
     /** Strongest verdict among the findings: potential = needs review, inconclusive = unable to verify. */
     verdict: findingVerdictEnum().notNull().default("confirmed"),

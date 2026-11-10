@@ -1,3 +1,5 @@
+import { EXPLAINED_RULES, explainIssue } from "@qa/core";
+import { GUIDED_RULES } from "@qa/core/fix-guide";
 import { describe, expect, it } from "vitest";
 import { CATALOGED_RULES, remediationFor } from "./catalog";
 import { deterministicIssue, remediationContext, UNABLE_TO_VERIFY } from "./deterministic";
@@ -183,6 +185,34 @@ describe("deterministic issue text", () => {
     };
     for (const [category, rules] of Object.entries(emitted))
       expect(CATALOGED_RULES[category], category).toEqual(expect.arrayContaining(rules));
+    // Plain-language explanations (Phase 15) cover the same rules, plus every design rule.
+    const explained = {
+      ...emitted,
+      design: [
+        "design-color-mismatch",
+        "design-color-near-palette",
+        "design-font-family-mismatch",
+        "design-font-size-mismatch",
+        "design-font-weight-mismatch",
+        "design-line-height-mismatch",
+        "design-letter-spacing-mismatch",
+        "design-radius-mismatch",
+        "design-spacing-mismatch",
+        "design-width-mismatch",
+      ],
+      accessibility: ["focus-indicator-visible", "image-alt", "color-contrast", "label"],
+    };
+    for (const [category, rules] of Object.entries(explained)) {
+      expect(EXPLAINED_RULES[category], category).toEqual(expect.arrayContaining(rules));
+      for (const r of rules) expect(explainIssue(category, r).specific, r).toBe(true);
+    }
+    expect(explainIssue("security", "exposed-secret-aws-access-key").specific).toBe(true);
+    // Fix guides (issue page): every rule these scanners emit has a rule-specific guide.
+    // Accessibility rules without one use the axe evidence and the catalog guidance.
+    for (const category of ["security", "seo", "links", "performance", "responsive"] as const)
+      expect(GUIDED_RULES[category], category).toEqual(
+        expect.arrayContaining(emitted[category] ?? []),
+      );
     const ctx = {
       ruleId: "",
       expected: null,
@@ -194,7 +224,14 @@ describe("deterministic issue text", () => {
     expect(remediationFor("security", { ...ctx, ruleId: "exposed-secret-aws-access-key" })).toMatch(
       /revoke and rotate/,
     );
-    expect(remediationFor("accessibility", { ...ctx, ruleId: "image-alt" })).toMatch(/image-alt/);
+    // Rules without specific guidance name the axe rule; specific entries add its documentation.
+    expect(remediationFor("accessibility", { ...ctx, ruleId: "frame-title" })).toMatch(
+      /frame-title/,
+    );
+    const helpUrl = "https://dequeuniversity.com/rules/axe/4.13/image-alt";
+    expect(remediationFor("accessibility", { ...ctx, ruleId: "image-alt", helpUrl })).toMatch(
+      /alt="" for purely decorative images.*Rule documentation: https:\/\/dequeuniversity/,
+    );
   });
 
   it("takes shared expected/actual values and documentation links from the evidence", () => {
@@ -262,11 +299,13 @@ describe("structured output schema", () => {
       }
     };
     walk(AI_BATCH_JSON_SCHEMA);
-    expect(objects.length).toBe(3);
+    // batch, issue, claim and the (nullable) plain-language explanation
+    expect(objects.length).toBe(4);
     for (const o of objects) {
       expect(o.additionalProperties).toBe(false);
       expect(o.required).toEqual(Object.keys(o.properties as object));
     }
     expect(text).toContain('"affectedElement":{"anyOf":[{"type":"string"},{"type":"null"}]}');
+    expect(text).toMatch(/"explanation":\{"anyOf":\[\{"type":"object"/);
   });
 });

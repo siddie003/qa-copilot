@@ -1,5 +1,6 @@
 export * from "./types";
 export * from "./providers";
+export { checkAIProvider, type AIHealthResult } from "./health";
 export { CATALOGED_RULES, remediationFor, type RemediationContext } from "./catalog";
 export {
   deterministicIssue,
@@ -42,6 +43,7 @@ export {
   escapeForTags,
   groupInput,
   PROMPT_VERSION,
+  scrubSecrets,
   SYSTEM_PROMPT,
   type PreparedGroup,
 } from "./prompt";

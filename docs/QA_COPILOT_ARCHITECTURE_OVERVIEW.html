@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>QA Copilot Architecture Overview</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  /* Layout: an executive briefing in one column; each numbered chapter starts on its own printed page; plain-language text first, technical names second. */
+  :root {
+    --bg: #ffffff; --surface: #f6f8fb; --fg: #17202b; --muted: #556275; --line: #d9dee6;
+    --accent: #1f5fae; --accent-soft: #e7eff9; --good: #1d7a4f; --good-soft: #e3f4ea;
+    --font-body: "Public Sans", "Segoe UI", system-ui, sans-serif;
+    --font-mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 14.5px; line-height: 1.6;
+    padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 32px 56px; }
+  .page { max-width: 62rem; margin: 0 auto; }
+  .page > * + * { margin-top: 40px; }
+  section > * + * { margin-top: 14px; }
+  .cover { border-bottom: 3px solid var(--accent); padding-bottom: 24px; }
+  .cover > * + * { margin-top: 12px; }
+  .eyebrow { font-family: var(--font-mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+  h1 { font-size: 34px; line-height: 1.15; margin: 0; text-wrap: balance; }
+  h2 { font-size: 22px; margin: 0; text-wrap: balance; color: var(--fg); }
+  h2 .n { color: var(--accent); margin-right: 6px; }
+  h3 { font-size: 15.5px; margin: 0; }
+  p { margin: 0; max-width: 72ch; }
+  .lead { font-size: 16px; color: var(--muted); }
+  ul { margin: 0; padding-left: 20px; }
+  li + li { margin-top: 5px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 12px; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+  .card > * + * { margin-top: 6px; }
+  .card p { color: var(--muted); font-size: 14px; }
+  .big { font-size: 26px; font-weight: 700; color: var(--accent); font-variant-numeric: tabular-nums; }
+  .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { background: var(--accent-soft); font-size: 11.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+  tr:last-child td { border-bottom: 0; }
+  td:first-child { font-weight: 600; white-space: nowrap; }
+  .tech { font-family: var(--font-mono); font-size: 12px; color: var(--accent); }
+  .panel { border: 1px solid var(--line); border-radius: 10px; padding: 14px; overflow-x: auto; background: #fff; }
+  .panel pre.mermaid { margin: 0; display: flex; justify-content: center; background: transparent; }
+  .note { border-left: 3px solid var(--accent); padding: 4px 0 4px 14px; color: var(--muted); }
+  .steps { counter-reset: s; list-style: none; padding: 0; display: grid; gap: 8px; }
+  .steps li { counter-increment: s; display: grid; grid-template-columns: 30px 1fr; gap: 10px; align-items: start; margin: 0; }
+  .steps li::before { content: counter(s); width: 26px; height: 26px; border-radius: 50%; background: var(--accent); color: #fff; font-weight: 700; font-size: 13px; display: grid; place-items: center; }
+  .layers { display: grid; gap: 10px; }
+  .layer { display: grid; grid-template-columns: 170px 1fr; gap: 14px; border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; background: var(--surface); }
+  .layer h3 { color: var(--accent); }
+  .layer p { color: var(--muted); font-size: 13.5px; max-width: none; }
+  .adv { display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 12px; }
+  .adv .card { border-left: 4px solid var(--good); }
+  footer { color: var(--muted); font-size: 12px; border-top: 1px solid var(--line); padding-top: 12px; }
+  @media (max-width: 560px) { .layer { grid-template-columns: 1fr; } td:first-child { white-space: normal; } }
+  @media print {
+    body { padding-block: 0; }
+    .chapter { break-before: page; }
+    .card, .layer, tr, .panel, .note { break-inside: avoid; }
+    h2, h3 { break-after: avoid; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <header class="cover">
+    <div class="eyebrow">QA Copilot · architecture and technology briefing · October 2026</div>
+    <h1>How QA Copilot is built, and why it is built this way</h1>
+    <p class="lead">A plain-language overview of the technology behind QA Copilot, an AI-assisted website quality-assurance tool. It is written for managers and leadership: what each part does, why it was chosen, and what it means for cost, security and growth.</p>
+  </header>
+
+  <!-- 1 -->
+  <section>
+    <h2><span class="n">1</span>Summary at a glance</h2>
+    <p><b>What QA Copilot does:</b> it opens a client's website in a real browser, the same way a visitor would, and checks it automatically for accessibility, security, SEO, broken links, speed, mobile layout and design quality. It compares what it finds with the approved Figma design, brand guidelines and approved text. Every problem comes with proof (a screenshot, the exact element, the measured value) and a plain-language explanation of how to fix it.</p>
+    <div class="grid">
+      <div class="card"><div class="big">7</div><h3>automated checks</h3><p>Accessibility, security, SEO, links, performance, mobile layout, design quality, plus design and content comparison.</p></div>
+      <div class="card"><div class="big">~16 min</div><h3>for a 17-page site</h3><p>Measured on the Ascendion test (24 Oct 2026), checking every page on desktop, tablet and mobile.</p></div>
+      <div class="card"><div class="big">$0.04–0.70</div><h3>AI cost per scan</h3><p>Depending on the AI model chosen. All the main software is open source, with no licence fees.</p></div>
+      <div class="card"><div class="big">547</div><h3>automated tests</h3><p>Run on every change to keep the product reliable.</p></div>
+    </div>
+    <p><b>The stack in one sentence:</b> a modern web application (Next.js and React) and a separate processing engine (Node.js with an automated Chrome browser), both written in TypeScript, sharing one PostgreSQL database. It connects to Figma for designs and to an AI provider for explanations.</p>
+  </section>
+
+  <!-- 2 -->
+  <section class="chapter">
+    <h2><span class="n">2</span>How it works, from start to finish</h2>
+    <p>The process has six steps. The tester only does steps 1, 2 and 6; everything in between is automatic.</p>
+    <ol class="steps">
+      <li><div><b>Set up a project.</b> Enter the website address and add the references: Figma design link, brand guidelines, font files, approved text documents and important page links.</div></li>
+      <li><div><b>Confirm the references.</b> The tool reads the Figma design and documents and turns them into a checklist of design values (fonts, sizes, colours). A person reviews and confirms it, so the tool never checks against wrong values.</div></li>
+      <li><div><b>Visit the website.</b> The tool finds the site's pages and opens each one in a real browser at desktop, tablet and mobile sizes, recording screenshots and measurements.</div></li>
+      <li><div><b>Run the checks.</b> Seven built-in checkers and two comparisons (design and content) look for problems. Each finding is backed by evidence.</div></li>
+      <li><div><b>Explain the problems.</b> Similar findings are grouped into issues. AI writes a short, plain-language explanation, and the tool checks that explanation against the evidence before showing it.</div></li>
+      <li><div><b>Review and report.</b> The team sees prioritised issues with evidence and fix guides, tracks them across repeated scans, and downloads a PDF report.</div></li>
+    </ol>
+    <div class="panel">
+<pre class="mermaid">
+flowchart LR
+  A["1 · Tester sets up<br/>the project"] --> B["2 · References read<br/>and confirmed"]
+  B --> C["3 · Website visited<br/>in a real browser"]
+  C --> D["4 · Seven checks +<br/>design and content<br/>comparison"]
+  D --> E["5 · Issues grouped,<br/>AI explains,<br/>evidence verified"]
+  E --> F["6 · Dashboard,<br/>issue tracking,<br/>PDF report"]
+  FIG["Figma design"] -.-> B
+  DOC["Brand guidelines,<br/>fonts, approved text"] -.-> B
+  SITE["Client website"] -.-> C
+  AI["AI service"] -.-> E
+</pre>
+    </div>
+    <p class="note">Example: on the Ascendion test the tool visited 17 pages, found that one approved section was missing from an article and that 8 site files were broken on every page, and explained each finding in plain language.</p>
+  </section>
+
+  <!-- 3 -->
+  <section class="chapter">
+    <h2><span class="n">3</span>System architecture overview</h2>
+    <p>The system has two main parts that share one database. A useful comparison is a restaurant: the <b>web application</b> is the front of house that takes orders and serves results; the <b>processing engine</b> is the kitchen that does the heavy work; the <b>database</b> is the order book both of them read.</p>
+    <div class="panel">
+<pre class="mermaid">
+flowchart LR
+  U["Team member<br/>(web browser)"] -->|secure connection| WEB
+  subgraph WEB["Web application"]
+    direction TB
+    UI["Screens and forms"]
+    API["Internal API"]
+    AUTH["Sign-in and access control"]
+  end
+  WEB --> DB[("Database<br/>projects, scans,<br/>issues, job queue")]
+  WEB --> FILES[("File storage<br/>uploads, screenshots,<br/>reports")]
+  DB <-->|new job signal| ENG
+  subgraph ENG["Processing engine"]
+    direction TB
+    SCAN["Scan runner"]
+    REFS["Design and document reader"]
+    REP["Report builder"]
+  end
+  ENG --> FILES
+  SCAN --> BROWSER["Automated Chrome browser<br/>with a safety filter"]
+  BROWSER -->|normal page visits| SITE["Client website"]
+  REFS -->|read-only| FIGMA["Figma"]
+  SCAN -->|issue summaries only| AIS["AI service<br/>(Gemini, Claude, OpenAI or Groq)"]
+</pre>
+    </div>
+    <ul>
+      <li><b>Why two parts:</b> checking a website takes minutes and uses a full browser. Keeping that work in a separate engine means the screens stay fast, and a problem on one client website can never crash the application the team is using.</li>
+      <li><b>One database for everything:</b> it stores the data and also works as the to-do list for the engine. This removes the need for an extra queueing server.</li>
+      <li><b>Outside services are limited to two:</b> Figma (read-only, for designs) and an AI service (for explanations). The AI only receives short issue summaries, never whole websites, files or screenshots.</li>
+    </ul>
+  </section>
+
+  <!-- 4 -->
+  <section class="chapter">
+    <h2><span class="n">4</span>The technology stack, layer by layer</h2>
+    <p>Each layer below shows what it does in plain words, the technology used, and why it was chosen. The reasons come from the project's design documents.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Layer</th><th>What it does</th><th>Technology</th><th>Why this choice</th><th>Common alternatives</th></tr></thead>
+        <tbody>
+          <tr><td>Frontend</td><td>The screens the team uses: projects, scan progress, issues, reports</td><td class="tech">Next.js 16, React 19, Tailwind CSS 4</td><td>Industry-standard, well supported; screens and API live in one application, so there is less to run</td><td>Angular, Vue, separate front and back ends</td></tr>
+          <tr><td>Backend / API</td><td>Receives requests, checks permissions, validates input, queues work</td><td class="tech">Next.js API routes, Zod validation</td><td>No second server to operate; every input is checked before use. Long work is never done here, so screens stay fast</td><td>Express, Django, Spring</td></tr>
+          <tr><td>Processing engine</td><td>Visits websites, runs the checks, reads designs, builds reports</td><td class="tech">Node.js 22, TypeScript</td><td>The same language as the web app, so rules and data definitions are shared, not duplicated. A Python backend was considered and rejected for this reason</td><td>Python, Java</td></tr>
+          <tr><td>Browser automation</td><td>Opens pages like a real visitor at three screen sizes, takes screenshots, measures speed, creates PDFs</td><td class="tech">Playwright + Chromium</td><td>Sees exactly what visitors see; one tool covers screenshots, measurements and PDF reports</td><td>Selenium, Puppeteer</td></tr>
+          <tr><td>Quality checks</td><td>Finds accessibility, design, content and link problems</td><td class="tech">axe-core, culori, diff, own rule engines</td><td>axe-core is the industry-standard accessibility engine (WCAG rules); colour comparison uses how humans perceive colour, not exact codes</td><td>Lighthouse, WAVE, commercial scanners</td></tr>
+          <tr><td>Document reading</td><td>Reads approved content and guidelines from PDF, Word, Markdown and text; validates font files</td><td class="tech">unpdf, mammoth, Markdown parser</td><td>Pure JavaScript, so no extra programs to install or maintain</td><td>Commercial document APIs</td></tr>
+          <tr><td>Database</td><td>Stores projects, scans, findings, issues and history; acts as the job queue</td><td class="tech">PostgreSQL 18, Drizzle ORM</td><td>Reliable and free; also handles the job queue, so no Redis server is needed. Drizzle was chosen over Prisma as lighter, with readable database changes</td><td>MySQL, MongoDB, Redis + BullMQ</td></tr>
+          <tr><td>File storage</td><td>Keeps uploads, screenshots, page snapshots and reports</td><td class="tech">Local file storage</td><td>Simple and free; can move to cloud storage later</td><td>Amazon S3, Azure Blob</td></tr>
+          <tr><td>Design integration</td><td>Reads design values (fonts, colours, buttons) from Figma</td><td class="tech">Figma REST API (read-only)</td><td>Official, supported way to read Figma files; reads only what is needed and skips unchanged files</td><td>Manual design specs</td></tr>
+          <tr><td>AI layer</td><td>Writes plain-language explanations of issues</td><td class="tech">Provider-neutral layer: Google Gemini (current), Anthropic Claude, OpenAI-compatible, Groq</td><td>Not locked to one vendor; switching is a settings change. Every AI answer is checked against the evidence</td><td>Single-vendor integration</td></tr>
+          <tr><td>Reports</td><td>PDF, Markdown and data (JSON) reports</td><td class="tech">HTML templates rendered by Chromium</td><td>Reuses the browser the tool already has; professional layout with no extra software</td><td>PDF libraries, reporting tools</td></tr>
+          <tr><td>Security</td><td>Sign-in, protection of client data and safe website visits</td><td class="tech">Better Auth, encryption, safety filter, rate limits, security headers</td><td>A maintained sign-in library instead of home-made security code (see section 6)</td><td>Auth0, Clerk (paid hosted services)</td></tr>
+          <tr><td>Quality assurance</td><td>Automatic tests on every change</td><td class="tech">Vitest, Playwright Test, ESLint, Prettier, TypeScript</td><td>Catches mistakes before they reach users; 547 unit tests plus end-to-end tests</td><td>Jest, Cypress</td></tr>
+          <tr><td>Deployment</td><td>Packaging to run on a server</td><td class="tech">Docker Compose (database, web app, engine)</td><td>One command starts the whole system on any server or cloud. Prepared but not yet run in a Docker environment; today it runs on a local machine</td><td>Kubernetes, managed platforms</td></tr>
+          <tr><td>Cloud services</td><td>Hosting</td><td class="tech">None required</td><td>Runs on any Windows, Linux or cloud server; the only outside services are Figma and the AI provider</td><td>AWS, Azure, Google Cloud</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- 5 -->
+  <section class="chapter">
+    <h2><span class="n">5</span>Component breakdown</h2>
+    <div class="layers">
+      <div class="layer"><h3>Frontend</h3><p>A five-step setup wizard, live scan progress, an issue list with evidence and fix guides, design and content comparisons, scan history, issue tracking (assign, resolve, reopen) and report downloads. Built to accessibility standards itself.</p></div>
+      <div class="layer"><h3>Backend and APIs</h3><p>A versioned internal API (<span class="tech">/api/v1</span>) for projects, uploads, references, scans, issues and reports. Every request is signed in, permission-checked, input-validated and rate-limited.</p></div>
+      <div class="layer"><h3>Processing engine</h3><p>Three workers in one service: the <b>scan runner</b> (visit pages, run checks, explain issues), the <b>reference reader</b> (Figma, guidelines, documents) and the <b>report builder</b>. Each scan step records its own status, so nothing is ever reported as done when it was skipped.</p></div>
+      <div class="layer"><h3>Database</h3><p>PostgreSQL holds all structured data and the job queue. Issues keep a stable identity across scans, so the tool can tell <b>new</b>, <b>resolved</b> and <b>reopened</b> problems apart.</p></div>
+      <div class="layer"><h3>Integrations</h3><p><b>Figma:</b> read-only design reading, with checks that skip unchanged files to save Figma's limited monthly reads. <b>AI:</b> any of four providers; the AI receives only short issue summaries, and its answers are verified against the evidence.</p></div>
+      <div class="layer"><h3>Security</h3><p>Sign-in with secure sessions; client secrets (Figma and AI keys, site passwords) encrypted; uploaded files checked for type and content; a safety filter that stops scans from reaching internal networks; security headers and rate limits.</p></div>
+      <div class="layer"><h3>Deployment</h3><p>Three containers (database, web application, processing engine) defined in Docker Compose, with health checks for monitoring.</p></div>
+    </div>
+  </section>
+
+  <!-- 6 -->
+  <section class="chapter">
+    <h2><span class="n">6</span>Scalability, performance, security, maintenance and cost</h2>
+    <div class="grid">
+      <div class="card"><h3>Scalability</h3><p>Grows by adding processing workers. Each scan runs on its own, and up to 500 pages per scan are supported. More clients means more workers or a bigger server, not a redesign.</p></div>
+      <div class="card"><h3>Performance</h3><p>About 16 minutes for a 17-page site on three screen sizes (measured). Heavy work runs in the background, so the screens stay fast while scans run. Repeated design reads are skipped when nothing changed.</p></div>
+      <div class="card"><h3>Security</h3><p>Client data stays on our server. Only short issue summaries go to the AI service, and Figma is read-only. Secrets are encrypted, sign-in uses a maintained library, and scans cannot reach private networks.</p></div>
+      <div class="card"><h3>Maintenance</h3><p>One programming language end to end, widely used open-source tools, 547 automated tests, clear logs and health checks. A new developer can understand the whole system without learning several languages.</p></div>
+      <div class="card"><h3>Cost</h3><p>No licence fees for the core software. Running costs are the server, AI usage (about $0.04–$0.70 per scan depending on the model) and optional Figma seats. A paid AI tier is recommended for client data.</p></div>
+      <div class="card"><h3>Reliability</h3><p>Every finding is evidence-backed. Uncertain results are labelled "potential" or "could not be verified" instead of being guessed. If the AI service is down, scans still complete with built-in explanations.</p></div>
+    </div>
+  </section>
+
+  <!-- 7 -->
+  <section class="chapter">
+    <h2><span class="n">7</span>Key business advantages</h2>
+    <div class="adv">
+      <div class="card"><h3>Faster QA cycles</h3><p>A full website check across three screen sizes in minutes instead of days of manual testing.</p></div>
+      <div class="card"><h3>Trustworthy results</h3><p>Every issue shows proof and a fix guide. AI text is fact-checked before it is shown, which reduces false alarms.</p></div>
+      <div class="card"><h3>Design and brand compliance</h3><p>Directly compares the live site with the Figma design, brand guidelines and approved text, which most QA tools cannot do.</p></div>
+      <div class="card"><h3>Low running cost</h3><p>Open-source foundation, no extra servers such as Redis, and AI costs measured in cents per scan.</p></div>
+      <div class="card"><h3>No vendor lock-in</h3><p>The AI provider can be switched in settings, and the system runs on any server or cloud.</p></div>
+      <div class="card"><h3>Ready to grow</h3><p>Handles multiple client projects and scales by adding workers; repeated scans show what was fixed and what came back.</p></div>
+    </div>
+    <p class="note"><b>Next steps already identified:</b> move client scans to a paid AI tier (data protection), reuse AI explanations for repeated issues, add a backup AI provider, support one design reference per page template, and add a usage and cost dashboard. The separate capacity review covers these in detail.</p>
+  </section>
+
+  <section>
+    <h2><span class="n">8</span>Glossary</h2>
+    <div class="table-wrap">
+      <table>
+        <tbody>
+          <tr><td>API</td><td>A defined way for two pieces of software to talk to each other.</td></tr>
+          <tr><td>Database</td><td>Organised storage for the system's data; here PostgreSQL.</td></tr>
+          <tr><td>Open source</td><td>Software whose code is public and free to use, with no licence fees.</td></tr>
+          <tr><td>Browser automation</td><td>Software that controls a real web browser to visit pages automatically.</td></tr>
+          <tr><td>WCAG</td><td>The international standard for website accessibility.</td></tr>
+          <tr><td>Container (Docker)</td><td>A packaged, self-contained unit of software that runs the same way on any server.</td></tr>
+          <tr><td>AI provider</td><td>A company offering AI models through the internet, such as Google (Gemini) or Anthropic (Claude).</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <footer>Prepared 28 October 2026 from the QA Copilot code, design documents (docs/ARCHITECTURE.md, IMPLEMENTATION_NOTES.md) and measurements from the Ascendion test scans. Versions: Next.js 16.3, React 19.3, Node.js 22, PostgreSQL 18, Playwright 1.63.</footer>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({ startOnLoad: true, securityLevel: "strict", theme: "default" });</script>
+</body>
+</html>

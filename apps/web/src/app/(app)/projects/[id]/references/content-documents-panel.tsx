@@ -3,11 +3,8 @@
 import { CONTENT_ACCEPT, contentKindForFilename } from "@qa/core/content";
 import { useRouter } from "next/navigation";
 import { Fragment, useRef, useState } from "react";
-import {
-  isProcessing,
-  ProcessingStatus,
-  useRefreshWhile,
-} from "@/components/references/processing-status";
+import { CoverageSummary, DocumentStatus } from "@/components/references/document-status";
+import { isProcessing, useRefreshWhile } from "@/components/references/processing-status";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -220,9 +217,6 @@ export function ContentDocumentsPanel({
                 <th scope="col" className="px-3 py-2 font-medium">
                   Status
                 </th>
-                <th scope="col" className="px-3 py-2 text-right font-medium">
-                  Blocks
-                </th>
                 <th scope="col" className="px-3 py-2 font-medium">
                   Website page
                 </th>
@@ -233,7 +227,17 @@ export function ContentDocumentsPanel({
             </thead>
             <tbody className="divide-y divide-border">
               {docs.map((d) => {
-                const meta = (d.meta ?? {}) as { pages?: number; warnings?: string[] };
+                const meta = (d.meta ?? {}) as {
+                  warnings?: string[];
+                  reusedFrom?: { filename: string };
+                };
+                // The coverage summary shows page-level problems; other warnings (e.g. Word
+                // conversion messages) are listed here.
+                const otherWarnings = (meta.warnings ?? []).filter(
+                  (w) => !d.coverage || !/page\(s\)|blocks? (longer|of the document)/.test(w),
+                );
+                const canContinue =
+                  d.parseStatus === "cancelled" || (d.parseStatus === "parsed" && d.resumable);
                 return (
                   <Fragment key={d.id}>
                     <tr className="align-top">
@@ -241,24 +245,30 @@ export function ContentDocumentsPanel({
                         <span className="break-all font-medium">{d.filename}</span>
                         <span className="block text-xs text-subtle">
                           {formatBytes(d.sizeBytes)}
-                          {meta.pages ? ` · ${meta.pages} page${meta.pages === 1 ? "" : "s"}` : ""}
+                          {d.attempts > 1 && d.parseStatus === "parsing"
+                            ? ` · attempt ${d.attempts}`
+                            : ""}
                         </span>
-                        {meta.warnings?.map((w) => (
+                        <CoverageSummary doc={d} />
+                        {meta.reusedFrom && (
+                          <span className="block text-xs text-subtle">
+                            Identical to “{meta.reusedFrom.filename}”: its results were reused
+                            instead of reading the file again.
+                          </span>
+                        )}
+                        {otherWarnings.map((w) => (
                           <span key={w} className="block text-xs text-warning">
                             {w}
                           </span>
                         ))}
                       </td>
                       <td className="px-3 py-2">
-                        <ProcessingStatus status={d.parseStatus} />
+                        <DocumentStatus doc={d} />
                         {d.parseError && (
                           <span className="mt-1 block max-w-xs text-xs text-danger">
                             {d.parseError}
                           </span>
                         )}
-                      </td>
-                      <td className="px-3 py-2 text-right tabular-nums">
-                        {d.parseStatus === "parsed" ? d.blockCount : "—"}
                       </td>
                       <td className="px-3 py-2">
                         <Mapping doc={d} />
@@ -274,6 +284,44 @@ export function ContentDocumentsPanel({
                             >
                               {open?.id === d.id ? "Hide text" : "View text"}
                               <span className="sr-only"> of {d.filename}</span>
+                            </Button>
+                          )}
+                          {isProcessing(d.parseStatus) && !d.cancelRequestedAt && (
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              disabled={busy}
+                              onClick={() =>
+                                act(
+                                  () =>
+                                    apiFetch(`/api/v1/content-documents/${d.id}/cancel`, {
+                                      method: "POST",
+                                    }),
+                                  d.parseStatus === "pending"
+                                    ? `Processing of “${d.filename}” was cancelled.`
+                                    : `Cancelling “${d.filename}”; pages already read are kept.`,
+                                )
+                              }
+                            >
+                              Cancel<span className="sr-only"> processing of {d.filename}</span>
+                            </Button>
+                          )}
+                          {canContinue && (
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              disabled={busy}
+                              onClick={() =>
+                                act(
+                                  () =>
+                                    apiFetch(`/api/v1/content-documents/${d.id}/retry`, {
+                                      method: "POST",
+                                    }),
+                                  `“${d.filename}” queued to continue where it stopped.`,
+                                )
+                              }
+                            >
+                              Continue reading<span className="sr-only"> {d.filename}</span>
                             </Button>
                           )}
                           {d.parseStatus === "failed" && (
@@ -302,8 +350,15 @@ export function ContentDocumentsPanel({
                     </tr>
                     {open?.id === d.id && (
                       <tr>
-                        <td colSpan={5} className="bg-surface-muted/50 px-3 py-3">
+                        <td colSpan={4} className="bg-surface-muted/50 px-3 py-3">
                           {open.error && <Alert tone="error">{open.error}</Alert>}
+                          {open.blocks && d.blockCount > open.blocks.length && (
+                            <p className="mb-2 text-xs text-muted">
+                              Showing the first {open.blocks.length.toLocaleString("en-US")} of{" "}
+                              {d.blockCount.toLocaleString("en-US")} blocks. Search the approved
+                              content below to find text anywhere in the document.
+                            </p>
+                          )}
                           {!open.blocks ? (
                             <p className="text-sm text-muted">Loading…</p>
                           ) : (
@@ -357,7 +412,7 @@ export function ContentDocumentsPanel({
       <div className="grid gap-3 sm:grid-cols-[1fr_12rem_auto] sm:items-end">
         <Field
           label="Upload documents"
-          hint={`PDF, DOCX, TXT or Markdown, up to ${state.limits.maxUploadMb} MB each. Scanned (image-only) PDFs are not supported.`}
+          hint={`PDF, DOCX, TXT or Markdown, up to ${state.limits.maxUploadMb} MB each. PDFs are read page by page; pages that are only images (scans) cannot be read because OCR is not available, and are listed.`}
         >
           {({ id, describedBy }) => (
             <input
@@ -397,6 +452,8 @@ export function ContentDocumentsPanel({
         </Alert>
       )}
 
+      {docs.some((d) => d.parseStatus === "parsed") && <ContentSearch projectId={projectId} />}
+
       <ConfirmDialog
         open={remove !== null}
         title={`Delete “${remove?.filename ?? ""}”?`}
@@ -416,5 +473,112 @@ export function ContentDocumentsPanel({
         }}
       />
     </section>
+  );
+}
+
+interface SearchResult {
+  documentId: string;
+  filename: string;
+  section: string | null;
+  pageHint: string | null;
+  pageStart: number | null;
+  pageEnd: number | null;
+  chunkIndex: number;
+  excerpt: string;
+}
+
+/**
+ * Full-text search over the indexed approved content (all parsed documents of the project).
+ * Results show the document, section and pages each excerpt comes from.
+ */
+function ContentSearch({ projectId }: { projectId: string }) {
+  const [q, setQ] = useState("");
+  const [results, setResults] = useState<SearchResult[] | null>(null);
+  const [searched, setSearched] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
+  async function search() {
+    const query = q.trim();
+    if (!query) return;
+    setPending(true);
+    setError(null);
+    try {
+      const r = await apiFetch<{ results: SearchResult[] }>(
+        `/api/v1/projects/${projectId}/content-search?q=${encodeURIComponent(query)}`,
+      );
+      setResults(r.results);
+      setSearched(query);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "The search failed.");
+    } finally {
+      setPending(false);
+    }
+  }
+  const pages = (r: SearchResult) =>
+    r.pageStart === null
+      ? null
+      : r.pageStart === r.pageEnd
+        ? `PDF page ${r.pageStart}`
+        : `PDF pages ${r.pageStart}–${r.pageEnd}`;
+  return (
+    <div className="space-y-3 border-t border-border pt-4">
+      <form
+        role="search"
+        aria-label="Search approved content"
+        className="flex flex-wrap items-end gap-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void search();
+        }}
+      >
+        <Field
+          label="Search approved content"
+          hint="Sections containing all the words come first; if there are none, sections with any of them."
+          className="min-w-64 flex-1"
+        >
+          {({ id, describedBy }) => (
+            <input
+              id={id}
+              type="search"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              maxLength={500}
+              placeholder="e.g. pricing plans"
+              aria-describedby={describedBy}
+              className={inputClasses}
+            />
+          )}
+        </Field>
+        <Button type="submit" variant="secondary" disabled={pending || !q.trim()} className="mb-5">
+          {pending ? "Searching…" : "Search"}
+        </Button>
+      </form>
+      {error && <Alert tone="error">{error}</Alert>}
+      {results && (
+        <div aria-live="polite">
+          {results.length === 0 ? (
+            <p className="text-sm text-muted">No indexed section contains “{searched}”.</p>
+          ) : (
+            <ol className="space-y-2" aria-label={`Search results for ${searched}`}>
+              {results.map((r) => (
+                <li
+                  key={`${r.documentId}:${r.chunkIndex}`}
+                  className="rounded-md border border-border p-3 text-sm"
+                >
+                  <p className="text-xs text-muted">
+                    <span className="font-medium text-foreground">{r.filename}</span>
+                    {[r.section, r.pageHint ? `page: ${r.pageHint}` : null, pages(r)]
+                      .filter(Boolean)
+                      .map((x) => ` · ${x}`)
+                      .join("")}
+                  </p>
+                  <p className="mt-1 whitespace-pre-line break-words">{r.excerpt}</p>
+                </li>
+              ))}
+            </ol>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
